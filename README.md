@@ -24,6 +24,7 @@ All R scripts used for data acquisition, processing, analysis, and model fitting
 - **FW_Fish_Shortfall.Rproj**: RStudio project file used to manage the project structure, file paths, and reproducible workflow.
 
 *Reminder: Download Input & Output Data*
+
 Before running any analysis scripts, download the **input/** and **output/** directories from [Zenodo repository](https://doi.org/10.5281/zenodo.18136683)
 
 This repository is organized as follows:
@@ -152,6 +153,7 @@ This repository is organized as follows:
 Ding, L., *et al.* Global freshwater fish biodiversity knowledge shortfalls inform strategic collection priorities. *[Journal]* (Year).
 
 Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.18136683
+
 
 
 
