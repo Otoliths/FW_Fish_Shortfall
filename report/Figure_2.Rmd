@@ -83,7 +83,7 @@ slopes_by_realm <- function(fit, vars, baseline_realm = "Afrotropic") {
       variable = factor(variable, levels = vars)
     ) %>%
     group_by(variable, realm) %>%
-    tidybayes::mean_qi(slope) %>%
+    tidybayes::median_qi(slope) %>%
     ungroup() %>%
     left_join(n_realm, by = "realm")
   
@@ -101,7 +101,7 @@ slopes_by_realm <- function(fit, vars, baseline_realm = "Afrotropic") {
   }) %>%
     mutate(slope = as.numeric(slope)) %>%
     group_by(variable) %>%
-    tidybayes::mean_qi(slope) %>%
+    tidybayes::median_qi(slope) %>%
     ungroup() %>%
     mutate(realm = "Global", n = nrow(dat))
   

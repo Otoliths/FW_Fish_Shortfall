@@ -134,7 +134,7 @@ global_slopes_linnaean <- map_dfr(
 ) %>%
   mutate(slope = as.numeric(slope)) %>%   
   group_by(variable) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
@@ -154,7 +154,7 @@ continent_slopes_linnaean <- map_dfr(
     variable  = factor(variable, levels = vars_linnaean)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   left_join(n_continent,by = "continent")
 
 
@@ -190,7 +190,7 @@ global_slopes_wallacean <- map_dfr(
 ) %>%
   mutate(slope = as.numeric(slope)) %>%   
   group_by(variable) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
@@ -210,7 +210,7 @@ continent_slopes_wallacean <- map_dfr(
     variable  = factor(variable, levels = vars_wallacean)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   left_join(n_continent,by = "continent")
 
 
@@ -246,7 +246,7 @@ global_slopes_darwinian <- map_dfr(
 ) %>%
   mutate(slope = as.numeric(slope)) %>%   
   group_by(variable) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
@@ -266,7 +266,7 @@ continent_slopes_darwinian <- map_dfr(
     variable  = factor(variable, levels = vars_darwinian)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::mean_qi(slope) %>%
+  tidybayes::median_qi(slope) %>%
   left_join(n_continent,by = "continent")
 
 

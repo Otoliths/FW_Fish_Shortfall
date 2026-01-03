@@ -1709,7 +1709,7 @@ options(warn = -1)</code></pre>
       variable = factor(variable, levels = vars)
     ) %&gt;%
     group_by(variable, realm) %&gt;%
-    tidybayes::mean_qi(slope) %&gt;%
+    tidybayes::median_qi(slope) %&gt;%
     ungroup() %&gt;%
     left_join(n_realm, by = &quot;realm&quot;)
   
@@ -1727,7 +1727,7 @@ options(warn = -1)</code></pre>
   }) %&gt;%
     mutate(slope = as.numeric(slope)) %&gt;%
     group_by(variable) %&gt;%
-    tidybayes::mean_qi(slope) %&gt;%
+    tidybayes::median_qi(slope) %&gt;%
     ungroup() %&gt;%
     mutate(realm = &quot;Global&quot;, n = nrow(dat))
   
