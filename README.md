@@ -1,6 +1,5 @@
----
-title: "Global Freshwater Fish Knowledge Shortfalls"
----
+ ## **Global Freshwater Fish Knowledge Shortfalls**
+
 
 A reproducible R-based workflow to quantify global Linnaean, Wallacean, and Darwinian knowledge shortfalls in freshwater fishes and to inform strategic biodiversity collection priorities.
 
@@ -151,4 +150,5 @@ This repository is organized as follows:
 Ding, L., *et al.* Global freshwater fish biodiversity knowledge shortfalls inform strategic collection priorities. *[Journal]* (Year).
 
 Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.18136683
+
 
