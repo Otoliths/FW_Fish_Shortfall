@@ -5,54 +5,16 @@ library(dplyr)        # Data manipulation verbs
 library(brms)         # Bayesian multilevel models interface
 library(arrow)
 
-fit <- readRDS("output/model/country_darwinian_all.rds") 
-comparison_loo <- loo_compare(fit$lognormal, 
-                              fit$gamma,
-                              fit$exponential,
-                              fit$weibull,
-                              model_names = names(fit), 
-                              criterion = "loo") %>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-comparison_waic <- loo_compare(fit$lognormal,
-                               fit$gamma,
-                               fit$exponential,
-                               fit$weibull,
-                               model_names = names(fit),
-                               criterion = "waic")%>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-
-bayes_r2_results <- lapply(fit, bayes_R2)
-bayes_r2_df <- do.call(rbind, lapply(names(bayes_r2_results), function(model) {
-  r2_data <- bayes_r2_results[[model]]
-  data.frame(
-    model = model,
-    bayes_r2_estimate = r2_data["R2", "Estimate"],
-    bayes_r2_se = r2_data["R2", "Est.Error"],
-    bayes_r2_2.5 = r2_data["R2", "Q2.5"],
-    bayes_r2_97.5 = r2_data["R2", "Q97.5"]
-  )
-}))
-
-model_results <- comparison_loo %>%
-  left_join(bayes_r2_df, by = "model") %>%
-  mutate(shortfall = "Darwinian")
-
-write.csv(model_results, paste0("output/tables/country_darwinian_model_comparison.csv"), row.names = FALSE)
-rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
-
 ################################################################################
 # ============================================================
 # Load country-level data and construct species × continent table
 # ============================================================
 source("code/functions/xxx.r")
-fit_D <- fit$weibull
-data_D <- readRDS("output/stan_survdata_country_darwinian.rds")
-cas <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
-data_D <- data_D %>% 
-  left_join(cas[, c(5,2)], by = "valid_name")
-dar_res <- compute_Darwinian_prob_country(
+source("code/functions/gompertz_family.R")
+fit_D <- readRDS("output/model/country_darwinian_gompertz_full.rds")
+data_D <- readRDS("output/stan_survdata_country_darwinian_single.rds")
+
+dar_res <- compute_Darwinian_prob(
   fit          = fit_D,
   year         = 2025,
   data         = data_D,
@@ -74,10 +36,10 @@ continent_darwinian <- darwinian_df %>%
   dplyr::group_by(continent) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq    = sum(weight * prob_noseq_mean),
+    SRnoseq    = sum(weight * prob_noseq_median),
     SRnoseq_ll = sum(weight * prob_noseq_lower),
     SRnoseq_ul = sum(weight * prob_noseq_upper),
     
@@ -96,10 +58,10 @@ global_darwinian <- darwinian_df %>%
   dplyr::mutate(weight = 1 / n_continent) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq     = sum(weight * prob_noseq_mean),
+    SRnoseq     = sum(weight * prob_noseq_median),
     SRnoseq_ll  = sum(weight * prob_noseq_lower),
     SRnoseq_ul  = sum(weight * prob_noseq_upper),
     .groups = "drop"
@@ -117,7 +79,7 @@ final_continent_global <- dplyr::bind_rows(
   continent_darwinian
 ) %>%
   mutate(
-    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_noseq_mean,prob_noseq_lower,prob_noseq_upper),
+    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_noseq_median,prob_noseq_lower,prob_noseq_upper),
     SRnoseq_display = sprintf("%d (%d–%d)", SRnoseq, SRnoseq_ll, SRnoseq_ul)
   ) %>%
   select(
@@ -140,10 +102,10 @@ country_darwinian <- darwinian_df %>%
   dplyr::group_by(iso3) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq    = sum(weight * prob_noseq_mean),
+    SRnoseq    = sum(weight * prob_noseq_median),
     SRnoseq_ll = sum(weight * prob_noseq_lower),
     SRnoseq_ul = sum(weight * prob_noseq_upper),
     
@@ -183,9 +145,9 @@ calculate_species_percentages <- function(data) {
   percentage_gt_threshold_high <- round((country_gt_threshold_high / total_country) * 100, 2)
   
   # Print results
-  cat(sprintf("\n%% country with x < %.0f of undescribed species: %.2f%%",
+  cat(sprintf("\n%% Drainage country with x < %.0f of undescribed species: %.2f%%",
               threshold_low, percentage_lt_threshold_low))
-  cat(sprintf("\n%% country with x > %.0f of undescribed species: %.2f%%\n",
+  cat(sprintf("\n%% Drainage country with x > %.0f of undescribed species: %.2f%%\n",
               threshold_high, percentage_gt_threshold_high))
 }
 country <- read.csv("input/raw/country_list.csv")
@@ -201,4 +163,4 @@ country_darwinian %>%
 calculate_species_percentages(country_darwinian)
 
 
-rm(country_darwinian,continent)
+rm(country_darwinian,country)

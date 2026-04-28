@@ -5,100 +5,15 @@ library(dplyr)        # Data manipulation verbs
 library(brms)         # Bayesian multilevel models interface
 library(arrow)
 
-fit <- readRDS("output/model/basin_wallacean_all.rds") 
-comparison_loo <- loo_compare(fit$lognormal, 
-                              fit$gamma,
-                              fit$exponential,
-                              fit$weibull,
-                              model_names = names(fit), 
-                              criterion = "loo") %>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-# comparison_waic <- loo_compare(fit$lognormal, 
-#                                fit$gamma,
-#                                fit$exponential,
-#                                fit$weibull,
-#                                model_names = names(fit), 
-#                                criterion = "waic")%>%
-#   as.data.frame()%>%
-#   tibble::rownames_to_column(var = "model")
-
-bayes_r2_results <- lapply(fit, bayes_R2)
-bayes_r2_df <- do.call(rbind, lapply(names(bayes_r2_results), function(model) {
-  r2_data <- bayes_r2_results[[model]]
-  data.frame(
-    model = model,
-    bayes_r2_estimate = r2_data["R2", "Estimate"],
-    bayes_r2_se = r2_data["R2", "Est.Error"],
-    bayes_r2_2.5 = r2_data["R2", "Q2.5"],
-    bayes_r2_97.5 = r2_data["R2", "Q97.5"]
-  )
-}))
-
-model_results <- comparison_loo %>%
-  left_join(bayes_r2_df, by = "model") %>%
-  mutate(shortfall = "Wallacean")
-
-write.csv(model_results, paste0("output/tables/basin_wallacean_model_comparison.csv"), row.names = FALSE)
-rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
-
-################################################################################
-# ------------------------------------------------------------------------------
-# Estimating Wallacean shortfalls (number of species lacking georeferenced
-# occurrence records) at realm, basin, and family levels
-# ------------------------------------------------------------------------------
-# Wallacean shortfalls quantify the expected number of already-described species
-# that will still lack a georeferenced occurrence record by a target year
-# (here, 2025). Unlike Linnaean shortfalls, this metric does not require
-# estimating total species richness, because the analysis is restricted to
-# species that are already formally described.
-#
-# For each species i, a lognormal time-to-event model provides the posterior
-# probability:
-#
-#       p_i = Pr(T_i > T*, the species has not yet obtained its first
-#             georeferenced occurrence by year T* = 2025).
-#
-# Let U denote the set of currently described species that lack any
-# georeferenced occurrence record:
-#
-#       U = { i : species i has no geolocation record at present }.
-#
-# For any taxonomic or geographic level L (realm, basin, or family), let:
-#
-#       n_L = | U_L |  = number of described species in level L that currently
-#                        lack a georeferenced occurrence.
-#
-#       p_mean,L  = mean posterior probability (over i ∈ U_L) that these species
-#                    will still lack a georeferenced record by 2025.
-#
-#       p_lower,L , p_upper,L = corresponding uncertainty bounds.
-#
-# The expected Wallacean shortfall at level L is therefore:
-#
-#       WS_L      = sum_{i ∈ U_L} p_i
-#                 ≈ n_L * p_mean,L
-#
-# with uncertainty bounds:
-#
-#       WS_ll,L   = n_L * p_lower,L
-#       WS_ul,L   = n_L * p_upper,L
-#
-# Because negative values are impossible, all estimates are truncated at zero
-# and rounded to integers. This formulation applies consistently to:
-#   - biogeographic realms,
-#   - drainage basins,
-#   - taxonomic families.
-# ------------------------------------------------------------------------------
-
-
 # ============================================================
 # Load basin-level data and construct species × realm table
 # ============================================================
 source("code/functions/xxx.r")
-data_W <- readRDS("output/stan_survdata_basin_wallacean.rds")
+source("code/functions/gompertz_family.R")
+data_W <- readRDS("output/stan_survdata_basin_wallacean_single.rds")
+fit <- readRDS("output/model/basin_wallacean_gompertz_full.rds")
 wal_res <- compute_Wallacean_prob(
-  fit          = fit$lognormal,
+  fit          = fit,
   year         = 2025,
   data         = data_W,
   year_var     = "year_description",
@@ -115,15 +30,15 @@ wallace_df <- cbind(data_W,wal_res$summary)
 realm_wallace <- wallace_df %>%
   dplyr::filter(event == 0) %>%
   dplyr::distinct(valid_name, biogeographic_realm, .keep_all = TRUE) %>%
-    dplyr::add_count(valid_name, name = "n_biogeographic_realm") %>%
+  dplyr::add_count(valid_name, name = "n_biogeographic_realm") %>%
   dplyr::mutate(weight = 1 / n_biogeographic_realm) %>%
   dplyr::group_by(biogeographic_realm) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc    = sum(weight * prob_nongeoloc_mean),
+    SRnoloc    = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"
@@ -141,10 +56,10 @@ global_wallace <- wallace_df %>%
   dplyr::mutate(weight = 1 / n_biogeographic_realm) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc     = sum(weight * prob_nongeoloc_mean),
+    SRnoloc     = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll  = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul  = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"
@@ -162,7 +77,7 @@ final_realm_global <- dplyr::bind_rows(
   realm_wallace
 ) %>%
   mutate(
-    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_nongeoloc_mean,prob_nongeoloc_lower,prob_nongeoloc_upper),
+    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_nongeoloc_median,prob_nongeoloc_lower,prob_nongeoloc_upper),
     SRgeoloc_display = sprintf("%d (%d–%d)", SRnoloc, SRnoloc_ll, SRnoloc_ul)
   ) %>%
   select(
@@ -186,10 +101,10 @@ basin_wallace <- wallace_df %>%
   dplyr::group_by(basin_id) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc    = sum(weight * prob_nongeoloc_mean),
+    SRnoloc    = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"

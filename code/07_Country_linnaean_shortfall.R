@@ -5,43 +5,6 @@ library(dplyr)        # Data manipulation verbs
 library(brms)         # Bayesian multilevel models interface
 library(arrow)
 
-fit <- readRDS("output/model/country_linnaean_all.rds") 
-comparison_loo <- loo_compare(fit$lognormal, 
-                              fit$gamma,
-                              fit$exponential,
-                              fit$weibull,
-                              model_names = names(fit), 
-                              criterion = "loo") %>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-comparison_waic <- loo_compare(fit$lognormal,
-                               fit$gamma,
-                               fit$exponential,
-                               fit$weibull,
-                               model_names = names(fit),
-                               criterion = "waic")%>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-
-bayes_r2_results <- lapply(fit, bayes_R2)
-bayes_r2_df <- do.call(rbind, lapply(names(bayes_r2_results), function(model) {
-  r2_data <- bayes_r2_results[[model]]
-  data.frame(
-    model = model,
-    bayes_r2_estimate = r2_data["R2", "Estimate"],
-    bayes_r2_se = r2_data["R2", "Est.Error"],
-    bayes_r2_2.5 = r2_data["R2", "Q2.5"],
-    bayes_r2_97.5 = r2_data["R2", "Q97.5"]
-  )
-}))
-
-model_results <- comparison_loo %>%
-  left_join(bayes_r2_df, by = "model") %>%
-  mutate(shortfall = "Linnaean")
-
-write.csv(model_results, paste0("output/tables/country_linnaean_model_comparison.csv"), row.names = FALSE)
-rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
-
 ################################################################################
 # ------------------------------------------------------------------------------
 # Estimating Linnaean shortfalls (number of undescribed species) at
@@ -55,12 +18,12 @@ rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
 # country-level dataset with at least:
 # - valid_name           : species name (or other unique taxon ID)
 # - continent  : code / factor
-base_df <- read_parquet("input/data_prep/linnaean_country.parquet")
+base_df <- read_parquet("input/data_prep/linnaean_country_single.parquet")
 # Species-level posterior probabilities
-data_L <- readRDS("output/stan_survdata_country_linnaean.rds")
+data_L <- readRDS("output/stan_survdata_country_linnaean_single.rds")
 source("code/functions/xxx.r")
-lin_res <- compute_Linnaean_prob_country(
-  fit          = fit$weibull,
+lin_res <- compute_Linnaean_prob_country_gompertz(
+  fit          = fit,
   year         = 2025,
   data         = data_L,
   include_data = F,
@@ -87,12 +50,12 @@ continent_richness_weighted <- w_cont %>%
 
 # ---- 2) continent posterior probabilities (weighted.mean) ----
 continent_prob <- prob_df %>%
-  select(valid_name, continent, prob_undesc_mean, prob_undesc_lower, prob_undesc_upper) %>%
+  select(valid_name, continent, prob_undesc_median, prob_undesc_lower, prob_undesc_upper) %>%
   left_join(w_cont, by = c("valid_name", "continent")) %>%
-  filter(!is.na(weight)) %>%   # 防止 join 不匹配造成 NA 权重
+  filter(!is.na(weight)) %>%   # 
   group_by(continent) %>%
   summarise(
-    prob_mean  = weighted.mean(prob_undesc_mean,  w = weight),
+    prob_median  = weighted.mean(prob_undesc_median,  w = weight),
     prob_lower = weighted.mean(prob_undesc_lower, w = weight),
     prob_upper = weighted.mean(prob_undesc_upper, w = weight),
     .groups = "drop"
@@ -103,10 +66,10 @@ eps <- 1e-12
 continent_SR_summary <- continent_richness_weighted %>%
   left_join(continent_prob, by = "continent") %>%
   mutate(
-    prob_mean  = pmin(prob_mean,  1 - eps),
+    prob_median  = pmin(prob_median,  1 - eps),
     prob_lower = pmin(prob_lower, 1 - eps),
     prob_upper = pmin(prob_upper, 1 - eps),
-    SRdesc    = round(pmax(richness_weighted / (1 - prob_mean)  - richness_weighted, 0)),
+    SRdesc    = round(pmax(richness_weighted / (1 - prob_median)  - richness_weighted, 0)),
     SRdesc_ll = round(pmax(richness_weighted / (1 - prob_lower) - richness_weighted, 0)),
     SRdesc_ul = round(pmax(richness_weighted / (1 - prob_upper) - richness_weighted, 0))
   )
@@ -123,7 +86,7 @@ global_summary <- continent_SR_summary %>%
   ) %>%
   mutate(
     richness_weighted_round = round(richness_weighted),
-    prob_mean  = SRdesc    / (richness_weighted + SRdesc),
+    prob_median  = SRdesc    / (richness_weighted + SRdesc),
     prob_lower = SRdesc_ll / (richness_weighted + SRdesc_ll),
     prob_upper = SRdesc_ul / (richness_weighted + SRdesc_ul)
   )
@@ -131,16 +94,16 @@ global_summary <- continent_SR_summary %>%
 # ---- 5) final table ----
 final_continent_global <- bind_rows(
   global_summary %>%
-    transmute(region, richness_weighted, prob_mean, prob_lower, prob_upper, SRdesc, SRdesc_ll, SRdesc_ul),
+    transmute(region, richness_weighted, prob_median, prob_lower, prob_upper, SRdesc, SRdesc_ll, SRdesc_ul),
   continent_SR_summary %>%
     transmute(
       region = continent,
-      richness_weighted, prob_mean, prob_lower, prob_upper,
+      richness_weighted, prob_median, prob_lower, prob_upper,
       SRdesc, SRdesc_ll, SRdesc_ul
     )
 ) %>%
   mutate(
-    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_mean, prob_lower, prob_upper),
+    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_median, prob_lower, prob_upper),
     SRdesc_display = sprintf("%d (%d–%d)", SRdesc, SRdesc_ll, SRdesc_ul)
   ) %>%
   transmute(
@@ -174,12 +137,12 @@ country_richness_weighted <- w_country %>%
 
 # ---- 2) country posterior probabilities (weighted.mean) ----
 country_prob <- prob_df %>%
-  select(valid_name, iso3, prob_undesc_mean, prob_undesc_lower, prob_undesc_upper) %>%
+  select(valid_name, iso3, prob_undesc_median, prob_undesc_lower, prob_undesc_upper) %>%
   left_join(w_country, by = c("valid_name", "iso3")) %>%
   filter(!is.na(weight)) %>%
   group_by(iso3) %>%
   summarise(
-    prob_undesc_mean  = weighted.mean(prob_undesc_mean,  w = weight),
+    prob_undesc_median  = weighted.mean(prob_undesc_median,  w = weight),
     prob_undesc_lower = weighted.mean(prob_undesc_lower, w = weight),
     prob_undesc_upper = weighted.mean(prob_undesc_upper, w = weight),
     .groups = "drop"
@@ -193,10 +156,10 @@ country_dat <- country_richness_weighted %>%
 eps <- 1e-12
 country_SR_summary <- country_dat %>%
   mutate(
-    prob_undesc_mean  = pmax(pmin(prob_undesc_mean,  1 - eps), 0),
+    prob_undesc_median  = pmax(pmin(prob_undesc_median,  1 - eps), 0),
     prob_undesc_lower = pmax(pmin(prob_undesc_lower, 1 - eps), 0),
     prob_undesc_upper = pmax(pmin(prob_undesc_upper, 1 - eps), 0),
-    SRdesc_raw    = richness_weighted / (1 - prob_undesc_mean)  - richness_weighted,
+    SRdesc_raw    = richness_weighted / (1 - prob_undesc_median)  - richness_weighted,
     SRdesc_ll_raw = richness_weighted / (1 - prob_undesc_lower) - richness_weighted,
     SRdesc_ul_raw = richness_weighted / (1 - prob_undesc_upper) - richness_weighted,
     SRdesc    = round(pmax(SRdesc_raw,    0)),
@@ -235,16 +198,16 @@ calculate_species_percentages <- function(data) {
   percentage_gt_threshold_high <- round((countrys_gt_threshold_high / total_country) * 100, 2)
   
   # Print results
-  cat(sprintf("\n%% countrys with x < %.0f of undescribed species: %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x < %.0f of undescribed species: %.2f%%",
               threshold_low, percentage_lt_threshold_low))
-  cat(sprintf("\n%% countrys with x > %.0f of undescribed species: %.2f%%\n",
+  cat(sprintf("\n%% Drainage countrys with x > %.0f of undescribed species: %.2f%%\n",
               threshold_high, percentage_gt_threshold_high))
 }
 
 country <- read.csv("input/raw/country_list.csv")
 country_SR_summary %>% 
   left_join(country, by = "iso3") %>%
-  filter(!is.na(continent)) %>%          # 保险起见，先剔除 NA realm
+  filter(!is.na(continent)) %>%          
   group_by(continent) %>%
   group_walk(~ {
     cat("\n========== Realm:", .y$continent, "==========\n")

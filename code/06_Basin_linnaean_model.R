@@ -20,7 +20,8 @@ options(brms.backend = "cmdstanr", brms.debug = TRUE)
 cas <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
 
 # Load pre-processed basin-level data from parquet
-base_df <- read_parquet("input/data_prep/linnaean_basin.parquet")
+base_df <- read_parquet("input/data_prep/linnaean_basin_single.parquet")
+#base_df <- read_parquet("input/data_prep/stan_survdata_basin_linnaean_multiple.rds")
 
 # Merge CAS species attributes (e.g. valid_name, year of description) into basin data
 # Column indices 5 and 8 in 'cas' should correspond to valid_name and family
@@ -41,7 +42,20 @@ data <- data %>%
   filter(time > 0) %>%                        # Remove records with non-positive discovery time
   mutate(event = 1) %>%                       # Event indicator for survival model (no censoring here)
   .[complete.cases(.), ]
-  
+
+data$watershed_area <- log10(data$watershed_area+1)
+data$range_size <- log10(data$range_size+1)  
+data$elevation <- log10(data$elevation+50)
+data$discharge <- log10(data$discharge+1)
+data$population_density <- log10(data$population_density+1)
+data$preserved_specimen <- log10(data$preserved_specimen+1)
+data$sequencing_effort <- log10(data$sequencing_effort+1)
+data$sampling_effort <- log10(data$sampling_effort+1)
+data$taxonomic_effort <- log10(data$taxonomic_effort+1)
+data$taxonomic_activity <- log10(data$taxonomic_activity+1)
+data$watertemp <- log10(data$watertemp+1)
+data$range_rarity <- log10(data$range_rarity+1)
+
   # ------------------------------------------------------------
 # 3. Define predictor set and transformation helpers
 # ------------------------------------------------------------
@@ -69,7 +83,7 @@ df_transformed <- data %>%
                 .names = "z_{.col}"))
 
 
-usdm::vif(df_transformed[,21:34] %>% as.data.frame())
+usdm::vif(df_transformed[,23:36] %>% as.data.frame())
 
 # ------------------------------------------------------------
 # 5. Assemble survival modeling dataset
@@ -111,7 +125,7 @@ stan_survdata <- df_transformed %>%
 
 
 rm(base_df,cas,data,df_transformed);gc()
-#saveRDS(stan_survdata,"stan_survdata_basin_linnaean.rds")
+#saveRDS(stan_survdata,"stan_survdata_basin_linnaean_single.rds")
 # ------------------------------------------------------------
 # 6. Specify Bayesian survival model formula
 # ------------------------------------------------------------
@@ -121,10 +135,10 @@ rm(base_df,cas,data,df_transformed);gc()
 # - Global fixed effects + Realm-level random slopes
 # - Random intercepts: basin_id, family_group
 
-# Vector of 14 standardized predictors
+# Vector of 12 standardized predictors
 preds <- c(
   "body_size",
-  "taxonmic_effort",
+  "taxonomic_effort",
   "taxonomic_activity",
   "watershed_area",
   "range_size",
@@ -133,13 +147,13 @@ preds <- c(
   "discharge",
   "watertemp",
   "preserved_specimen",
-  "sequencing_effort",
-  "sampling_effort",
+  #"sequencing_effort",
+  #"sampling_effort",
   "range_rarity",
   "population_density"
 )
 
-# Collapse predictors into a single string "x1 + x2 + ... + x14"
+# Collapse predictors into a single string "x1 + x2 + ... + x12"
 pred_str <- paste(preds, collapse = " + ")
 
 # ------------------------------------------------------------
@@ -168,12 +182,6 @@ form <- bf(
 )
 
 
-# ------------------------------------------------------------
-# 7. MCMC configuration (shared across distributions)
-# ------------------------------------------------------------
-
-# These arguments are shared across all survival distributions and then
-# combined with model-specific settings in 'model_configs'.
 
 priors <- c(
   prior(normal(0, 0.5), class = "b"),          # Global slopes and all other fixed effects
@@ -191,22 +199,22 @@ common_args <- list(
   backend = "cmdstanr",
   stan_model_args = list(
     cpp_options = list(
-      "STAN_THREADS = TRUE",
-      "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
-      "OPENCL_DEVICE=0",            # Select OpenCL device
-      "OPENCL_PLATFORM=0",          # Select OpenCL platform
+      "STAN_THREADS=TRUE",
+      # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+      # "OPENCL_DEVICE=0",            # Select OpenCL device
+      # "OPENCL_PLATFORM=0",          # Select OpenCL platform
       "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
     )
   ),
   threads   = threading(10, static = TRUE),  # Within-chain parallelization
-  normalize = FALSE,                         # Use raw scale (we already normalized predictors)
+  normalize = TRUE,                         #  keep full likelihood for LOO comparison
   thin      = 10,                            # Thinning to reduce autocorrelation / disk usage
   save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
   init      = 0.1,                          # Small positive initial values
   control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
                  max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
-                 ),
-  prior     = priors 
+  ),
+  prior     = priors
 )
 
 
@@ -405,3 +413,90 @@ message(sprintf(
   paste0(output_path, ".txt"),
   paste0(output_path, ".md")
 ))
+
+################################################################################
+source("code/functions/gompertz_family.R")
+form_gompertz <- bf(
+  as.formula(
+    paste(
+      # survival likelihood with censoring indicator
+      "time ~ 1 +",
+      
+      # fixed-effect interactions: all predictors × realm
+      paste0("(", pred_str, ") * biogeographic_realm"),
+      
+      # hierarchical random intercepts
+      "+ (1 | basin_id)",
+      "+ (1 | family_group)"
+    )
+  ),
+  gamma ~ 1
+)
+
+fit_gomp <- brm(
+  formula = form_gompertz,
+  data    = stan_survdata,
+  chains  = 8,
+  cores   = 8,
+  iter = 6000,
+  warmup = 3000,
+  seed    = 2025,
+  backend = "cmdstanr",
+  stan_model_args = list(
+    cpp_options = list(
+      "STAN_THREADS=TRUE",
+      # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+      # "OPENCL_DEVICE=0",            # Select OpenCL device
+      # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+      "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+    )
+  ),
+  threads   = threading(10, static = TRUE),  # Within-chain parallelization
+  normalize = TRUE,                         #  keep full likelihood for LOO comparison
+  thin      = 10,                            # Thinning to reduce autocorrelation / disk usage
+  save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+  init      = 0.1,                          # Small positive initial values
+  control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
+                 max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+  ),
+  prior     = priors,
+  family = gompertz_family,
+  stanvars = stanvar(scode = stan_funs, block = "functions")
+)
+
+saveRDS(fit_gomp, file.path("output/model", "basin_linnaean_gompertz.rds"))
+
+
+
+# stan_survdata <- readRDS("output/stan_survdata_basin_linnaean_multiple.rds")
+# brm_multiple(
+#   formula = form,
+#   data    = stan_survdata,
+#   chains  = 8,
+#   cores   = 8,
+#   iter = 6000,
+#   warmup = 3000,
+#   seed    = 2025,
+#   backend = "cmdstanr",
+#   stan_model_args = list(
+#     cpp_options = list(
+#       "STAN_THREADS=TRUE",
+#       # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+#       # "OPENCL_DEVICE=0",            # Select OpenCL device
+#       # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+#       "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+#     )
+#   ),
+#   threads   = threading(10, static = TRUE),  # Within-chain parallelization
+#   normalize = TRUE,                         #  keep full likelihood for LOO comparison
+#   thin      = 10,                            # Thinning to reduce autocorrelation / disk usage
+#   save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+#   init      = 0.1,                          # Small positive initial values
+#   control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
+#                  max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+#   ),
+#   prior     = priors,
+#   family = brmsfamily("weibull"),
+#   combine = TRUE                           #fitted models should be combined into a single fitted model
+# )
+

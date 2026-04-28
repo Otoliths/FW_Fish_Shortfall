@@ -20,7 +20,8 @@ options(brms.backend = "cmdstanr", brms.debug = TRUE)
 cas <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
 
 # Load pre-processed basin-level data from parquet
-base_df <- read_parquet("input/data_prep/wallacean_basin.parquet")
+base_df <- read_parquet("input/data_prep/wallacean_basin_single.parquet")
+# base_df <- read_parquet("input/data_prep/wallacean_basin_multiple.rds")
 
 # Merge CAS species attributes (e.g. valid_name, year of description) into basin data
 # Column indices 5,2,and 8 in 'cas' should correspond to valid_name ,year_description, and family
@@ -128,11 +129,30 @@ left_join(
   ) %>%
   select(-latitude_avg)
 
+data_filled <- data_filled %>% left_join(
+  readRDS("input/data_prep/taxonomic_activity_year.rds") %>%
+    group_by(valid_name) %>%
+    summarise(
+      TAA_mean = mean(TAA, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    select(valid_name, taxonomic_activity_avg = TAA_mean) %>%
+    filter(!is.na(taxonomic_activity_avg)),
+  by = c("valid_name")
+) %>%
+  mutate(
+    taxonomic_activity = if_else(
+      is.na(taxonomic_activity) & is.na(year_geolocation),
+      taxonomic_activity_avg,
+      taxonomic_activity
+    )
+  ) %>%
+  select(-taxonomic_activity_avg)
+
 rm(basin_discharge_avg,basin_watertemp_avg,basin_rarity_avg,basin_elevation_avg,
    basin_population_density_avg,cas,data,base_df,basin_latitude_avg)
 
 data_filled$range_size[is.na(data_filled$range_size)] <- 0
-data_filled$preserved_specimen[is.na(data_filled$preserved_specimen)]  <- 0
 data_filled$sequencing_effort[is.na(data_filled$sequencing_effort)]  <- 0
 data_filled$sampling_effort[is.na(data_filled$sampling_effort)]  <- 0
 
@@ -187,13 +207,12 @@ data_surv <- data_filled %>%
   filter(time > 0) 
 
 vars <- c(
-  "log_length_max", "taxonmic_effort", "taxonomic_activity",
+  "log_length_max", "taxonomic_effort", "taxonomic_activity",
   "watershed_area", "range_size", "elevation", "latitude",
   "discharge", "watertemp", "preserved_specimen",
-  "sequencing_effort", "sampling_effort",
-  "range_rarity", "population_density"
+  "range_rarity", "population_density",
+  "sequencing_effort", "sampling_effort"
 )
-
 
 data_surv <- data_surv[, c("basin_id",
                            "valid_name",
@@ -207,7 +226,18 @@ table(data_surv$event)
 # 46001 51701 
 rm(data_filled)
 
-
+data_surv$taxonomic_effort <- log10(data_surv$taxonomic_effort+1)
+data_surv$taxonomic_activity <- log10(data_surv$taxonomic_activity+1)
+data_surv$watershed_area <- log10(data_surv$watershed_area+1)
+data_surv$range_size <- log10(data_surv$range_size+1)
+data_surv$elevation <- log10(data_surv$elevation+30)
+data_surv$discharge <- log10(data_surv$discharge+1)
+data_surv$watertemp <- log10(data_surv$watertemp+1)
+data_surv$preserved_specimen <- log10(data_surv$preserved_specimen+1)
+data_surv$range_rarity <- log10(data_surv$range_rarity+1)
+data_surv$population_density <- log10(data_surv$population_density+1)
+data_surv$sequencing_effort <- log10(data_surv$sequencing_effort+1)
+data_surv$sampling_effort <- log10(data_surv$sampling_effort+1)
 # ------------------------------------------------------------
 # 3. Define predictor set and transformation helpers
 # ------------------------------------------------------------
@@ -371,10 +401,10 @@ common_args <- list(
 # Each list element specifies a different parametric survival family
 # and the corresponding number of iterations / warmup samples.
 model_configs <- list(
-  list(model_name = "lognormal",   family = brmsfamily("lognormal"),   iter = 4000, warmup = 2000),
-  list(model_name = "gamma",       family = brmsfamily("Gamma"),      iter = 4000, warmup = 2000),
-  list(model_name = "exponential", family = brmsfamily("exponential"), iter = 4000, warmup = 2000),
-  list(model_name = "weibull",     family = brmsfamily("weibull"),    iter = 4000, warmup = 2000)
+  list(model_name = "lognormal",   family = brmsfamily("lognormal"),   iter = 6000, warmup = 3000),
+  list(model_name = "gamma",       family = brmsfamily("Gamma"),      iter = 6000, warmup = 3000),
+  list(model_name = "exponential", family = brmsfamily("exponential"), iter = 6000, warmup = 3000),
+  list(model_name = "weibull",     family = brmsfamily("weibull"),    iter = 6000, warmup = 3000)
 )
 
 # ------------------------------------------------------------
@@ -559,3 +589,92 @@ message(sprintf(
   paste0(output_path, ".txt"),
   paste0(output_path, ".md")
 ))
+
+################################################################################
+source("code/functions/gompertz_family.R")
+form_gompertz <- bf(
+  as.formula(
+    paste(
+      # survival likelihood with censoring indicator
+      "time | cens(1 - event) ~ 1 +",
+      
+      # fixed-effect interactions: all predictors × realm
+      paste0("(", pred_str, ") * biogeographic_realm"),
+      
+      # hierarchical random intercepts
+      "+ (1 | basin_id)",
+      "+ (1 | family_group)"
+    )
+  ),
+  gamma ~ 1
+)
+
+fit_gomp <- brm(
+  formula = form_gompertz,
+  data    = stan_survdata,
+  chains  = 8,
+  cores   = 8,
+  iter = 6000,
+  warmup = 3000,
+  seed    = 2025,
+  backend = "cmdstanr",
+  stan_model_args = list(
+    cpp_options = list(
+      "STAN_THREADS=TRUE",
+      # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+      # "OPENCL_DEVICE=0",            # Select OpenCL device
+      # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+      "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+    )
+  ),
+  threads   = threading(10, static = TRUE),  # Within-chain parallelization
+  normalize = TRUE,                         #  keep full likelihood for LOO comparison
+  thin      = 10,                            # Thinning to reduce autocorrelation / disk usage
+  save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+  init      = 0.1,                          # Small positive initial values
+  control = list(adapt_delta = 0.98,         # High target acceptance to reduce divergences
+                 max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+  ),
+  prior     = priors,
+  family = gompertz_family,
+  stanvars = stanvar(scode = stan_funs, block = "functions")
+)
+
+saveRDS(fit_gomp, file.path("output/model", "basin_wallacean_gompertz.rds"))
+
+# stan_survdata <- readRDS("output/stan_survdata_basin_wallacean_multiple.rds")
+# brm_multiple(
+#   formula = form_gompertz,
+#   data    = stan_survdata,
+#   chains  = 8,
+#   cores   = 8,
+#   iter = 6000,
+#   warmup = 3000,
+#   seed    = 2025,
+#   backend = "cmdstanr",
+#   stan_model_args = list(
+#     cpp_options = list(
+#       "STAN_THREADS=TRUE",
+#       # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+#       # "OPENCL_DEVICE=0",            # Select OpenCL device
+#       # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+#       "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+#     )
+#   ),
+#   threads   = threading(10, static = TRUE),  # Within-chain parallelization
+#   normalize = TRUE,                         #  keep full likelihood for LOO comparison
+#   thin      = 10,                            # Thinning to reduce autocorrelation / disk usage
+#   save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+#   init      = 0.1,                          # Small positive initial values
+#   control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
+#                  max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+#   ),
+#   prior     = priors,
+#   family = gompertz_family,
+#   stanvars = stanvar(scode = stan_funs, block = "functions"),
+#   combine = TRUE                           #fitted models should be combined into a single fitted model
+# )
+
+
+
+

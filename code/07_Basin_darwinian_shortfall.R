@@ -5,98 +5,13 @@ library(dplyr)        # Data manipulation verbs
 library(brms)         # Bayesian multilevel models interface
 library(arrow)
 
-fit <- readRDS("output/model/basin_darwinian_all.rds") 
-comparison_loo <- loo_compare(fit$lognormal, 
-                              fit$gamma,
-                              fit$exponential,
-                              fit$weibull,
-                              model_names = names(fit), 
-                              criterion = "loo") %>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-comparison_waic <- loo_compare(fit$lognormal,
-                               fit$gamma,
-                               fit$exponential,
-                               fit$weibull,
-                               model_names = names(fit),
-                               criterion = "waic")%>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-
-bayes_r2_results <- lapply(fit, bayes_R2)
-bayes_r2_df <- do.call(rbind, lapply(names(bayes_r2_results), function(model) {
-  r2_data <- bayes_r2_results[[model]]
-  data.frame(
-    model = model,
-    bayes_r2_estimate = r2_data["R2", "Estimate"],
-    bayes_r2_se = r2_data["R2", "Est.Error"],
-    bayes_r2_2.5 = r2_data["R2", "Q2.5"],
-    bayes_r2_97.5 = r2_data["R2", "Q97.5"]
-  )
-}))
-
-model_results <- comparison_loo %>%
-  left_join(bayes_r2_df, by = "model") %>%
-  mutate(shortfall = "Darwinian")
-
-write.csv(model_results, paste0("output/tables/basin_darwinian_model_comparison.csv"), row.names = FALSE)
-rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
-
-################################################################################
-# ------------------------------------------------------------------------------
-# Estimating Darwinian shortfalls (number of species lacking genetic sequences)
-# at realm, basin, and family levels
-# ------------------------------------------------------------------------------
-# Darwinian shortfalls quantify the expected number of already-described species
-# that will still lack any genetic sequence (e.g., COI, Cytb, 16S) by a target
-# year (here, 2025). Unlike Linnaean shortfalls, this metric does not require
-# estimating total species richness, because the analysis is restricted to
-# species that are already formally described.
-#
-# For each species i, a lognormal time-to-event model provides the posterior
-# probability:
-#
-#       p_i = Pr(T_i > T*, meaning the species has not yet obtained its first
-#             genetic sequence by year T* = 2025).
-#
-# Let U denote the set of currently described species that lack any genetic
-# sequence at present:
-#
-#       U = { i : species i has no available genetic sequence }.
-#
-# For any taxonomic or geographic level L (realm, basin, or family), define:
-#
-#       n_L = |U_L|  = number of described species in level L that currently
-#                      lack a genetic sequence.
-#
-#       p_mean,L   = mean posterior probability (over i ∈ U_L) that these
-#                     species will still remain unsequenced by 2025.
-#
-#       p_lower,L , p_upper,L = corresponding uncertainty bounds.
-#
-# The expected Darwinian shortfall at level L is:
-#
-#       DS_L      = sum_{i ∈ U_L} p_i
-#                 ≈ n_L * p_mean,L
-#
-# with uncertainty intervals:
-#
-#       DS_ll,L   = n_L * p_lower,L
-#       DS_ul,L   = n_L * p_upper,L
-#
-# Because negative values are impossible, all estimates are truncated at zero
-# and rounded to integers. This formulation applies consistently to:
-#   - biogeographic realms,
-#   - drainage basins,
-#   - taxonomic families.
-# ------------------------------------------------------------------------------
-
 # ============================================================
 # Load basin-level data and construct species × realm table
 # ============================================================
 source("code/functions/xxx.r")
-fit_D <- fit$gamma
-data_D <- readRDS("output/stan_survdata_basin_darwinian.rds")
+source("code/functions/gompertz_family.R")
+fit_D <- readRDS("output/model/basin_darwinian_gompertz_full.rds")
+data_D <- readRDS("output/stan_survdata_basin_darwinian_single.rds")
 dar_res <- compute_Darwinian_prob(
   fit          = fit_D,
   year         = 2025,
@@ -119,10 +34,10 @@ realm_darwinian <- darwinian_df %>%
   dplyr::group_by(biogeographic_realm) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq    = sum(weight * prob_noseq_mean),
+    SRnoseq    = sum(weight * prob_noseq_median),
     SRnoseq_ll = sum(weight * prob_noseq_lower),
     SRnoseq_ul = sum(weight * prob_noseq_upper),
     
@@ -141,10 +56,10 @@ global_darwinian <- darwinian_df %>%
   dplyr::mutate(weight = 1 / n_biogeographic_realm) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq     = sum(weight * prob_noseq_mean),
+    SRnoseq     = sum(weight * prob_noseq_median),
     SRnoseq_ll  = sum(weight * prob_noseq_lower),
     SRnoseq_ul  = sum(weight * prob_noseq_upper),
     .groups = "drop"
@@ -162,7 +77,7 @@ final_realm_global <- dplyr::bind_rows(
   realm_darwinian
 ) %>%
   mutate(
-    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_noseq_mean,prob_noseq_lower,prob_noseq_upper),
+    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_noseq_median,prob_noseq_lower,prob_noseq_upper),
     SRnoseq_display = sprintf("%d (%d–%d)", SRnoseq, SRnoseq_ll, SRnoseq_ul)
   ) %>%
   select(
@@ -185,10 +100,10 @@ basin_darwinian <- darwinian_df %>%
   dplyr::group_by(basin_id) %>%
   dplyr::summarise(
     n_noseq = sum(weight),
-    prob_noseq_mean  = sum(weight * prob_noseq_mean)  / sum(weight),
+    prob_noseq_median  = sum(weight * prob_noseq_median)  / sum(weight),
     prob_noseq_lower = sum(weight * prob_noseq_lower) / sum(weight),
     prob_noseq_upper = sum(weight * prob_noseq_upper) / sum(weight),
-    SRnoseq    = sum(weight * prob_noseq_mean),
+    SRnoseq    = sum(weight * prob_noseq_median),
     SRnoseq_ll = sum(weight * prob_noseq_lower),
     SRnoseq_ul = sum(weight * prob_noseq_upper),
     

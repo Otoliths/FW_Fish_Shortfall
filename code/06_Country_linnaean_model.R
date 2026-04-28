@@ -19,7 +19,7 @@ options(brms.backend = "cmdstanr", brms.debug = TRUE)
 cas <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
 
 # Load pre-processed country-level data from parquet
-base_df <- read_parquet("input/data_prep/linnaean_country.parquet")
+base_df <- read_parquet("input/data_prep/linnaean_country_single.parquet")
 
 # Merge CAS species attributes (e.g. valid_name, year of description) into country data
 # Column indices 5 and 8 in 'cas' should correspond to valid_name and family
@@ -36,10 +36,24 @@ data <- base_df %>%
 # - Remove non-positive times (pre-Linnaean or problematic records)
 # - Create event indicator (=1 for all records in this fully observed dataset)
 data <- data %>% 
+  filter(year_description > 1758) %>%
   mutate(time = year_description - 1758) %>%  # Discovery time since Linnaeus (in years)
   filter(time > 0) %>%                        # Remove records with non-positive discovery time
-  mutate(event = 1)                        # Event indicator for survival model (no censoring here)
-  
+  mutate(event = 1) %>%                        # Event indicator for survival model (no censoring here)
+  .[complete.cases(.), ]
+
+data$country_area <- log10(data$country_area+1)
+data$range_size <- log10(data$range_size+1)  
+data$elevation <- log10(data$elevation+300)
+data$discharge <- log10(data$discharge+1)
+data$population_density <- log10(data$population_density+1)
+data$preserved_specimen <- log10(data$preserved_specimen+1)
+data$sequencing_effort <- log10(data$sequencing_effort+1)
+data$sampling_effort <- log10(data$sampling_effort+1)
+data$taxonomic_effort <- log10(data$taxonomic_effort+1)
+data$taxonomic_activity <- log10(data$taxonomic_activity+1)
+data$watertemp <- log10(data$watertemp+1)
+data$range_rarity <- log10(data$range_rarity+1)
   
   # ------------------------------------------------------------
 # 3. Define predictor set and transformation helpers
@@ -48,11 +62,11 @@ data <- data %>%
 # List of continuous predictors to be normalized or transformed
 # 'log_length_max' is assumed to be already on log scale
 vars <- c(
-  "log_length_max", "taxonmic_effort", "taxonomic_activity",
+  "log_length_max", "taxonomic_effort", "taxonomic_activity",
   "country_area", "range_size", "elevation", "latitude",
   "discharge", "watertemp", "preserved_specimen",
-  "sequencing_effort", "sampling_effort",
-  "range_rarity", "population_density"
+  "range_rarity", "population_density",
+  "sequencing_effort", "sampling_effort"
 )
 # data$latitude <- abs(data$latitude)
 # Convert to plain data.frame for usdm::vif
@@ -68,7 +82,7 @@ df_transformed <- data %>%
                 .names = "z_{.col}"))
 
 
-usdm::vif(df_transformed[,23:36] %>% as.data.frame())
+usdm::vif(df_transformed[,23:34] %>% as.data.frame())
 
 # ------------------------------------------------------------
 # 5. Assemble survival modeling dataset
@@ -405,4 +419,91 @@ message(sprintf(
   paste0(output_path, ".txt"),
   paste0(output_path, ".md")
 ))
+
+################################################################################
+source("code/functions/gompertz_family.R")  # updated 2025-10-08
+
+form_gompertz <- bf(
+  as.formula(
+    paste(
+      # survival likelihood with censoring indicator
+      "time ~ 1 +",
+      
+      # fixed-effect interactions: all predictors × continent
+      paste0("(", pred_str, ") * continent"),
+      
+      # hierarchical random intercepts
+      "+ (1 | iso3)",
+      "+ (1 | family_group)"
+    )
+  ),
+  gamma ~ 1
+)
+
+fit_gomp <- brm(
+  formula = form_gompertz,
+  data    = stan_survdata,
+  chains  = 8,
+  cores   = 8,
+  iter = 6000,
+  warmup = 3000,
+  seed    = 2025,
+  backend = "cmdstanr",
+  stan_model_args = list(
+    cpp_options = list(
+      "STAN_THREADS=TRUE",
+      # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+      # "OPENCL_DEVICE=0",            # Select OpenCL device
+      # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+      "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+    )
+  ),
+  threads   = threading(10, static = TRUE),  # Within-chain parallelization
+  normalize = TRUE,                         #  keep full likelihood for LOO comparison
+  thin      = 1,                            # Thinning to reduce autocorrelation / disk usage
+  save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+  init      = 0.1,                          # Small positive initial values
+  control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
+                 max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+  ),
+  prior     = priors_linnaean,
+  family = gompertz_family,
+  stanvars = stanvar(scode = stan_funs, block = "functions")
+)
+
+saveRDS(fit_gomp, file.path("output/model", "country_linnaean_gompertz.rds"))
+
+
+# stan_survdata <- readRDS("output/stan_survdata_country_linnaean_multiple.rds")
+# brm_multiple(
+#   formula = form_gompertz,
+#   data    = stan_survdata,
+#   chains  = 8,
+#   cores   = 8,
+#   iter = 6000,
+#   warmup = 3000,
+#   seed    = 2025,
+#   backend = "cmdstanr",
+#   stan_model_args = list(
+#     cpp_options = list(
+#       "STAN_THREADS=TRUE",
+#       # "STAN_OPENCL=TRUE",           # Enable OpenCL (GPU) support if available
+#       # "OPENCL_DEVICE=0",            # Select OpenCL device
+#       # "OPENCL_PLATFORM=0",          # Select OpenCL platform
+#       "CXXFLAGS += -O3 -Wno-overloaded-virtual"  # Compiler optimization flags
+#     )
+#   ),
+#   threads   = threading(10, static = TRUE),  # Within-chain parallelization
+#   normalize = TRUE,                         #  keep full likelihood for LOO comparison
+#   thin      = 1,                            # Thinning to reduce autocorrelation / disk usage
+#   save_pars = save_pars(all = TRUE),         # Save all parameters (useful for post-processing)
+#   init      = 0.1,                          # Small positive initial values
+#   control = list(adapt_delta = 0.99,         # High target acceptance to reduce divergences
+#                  max_treedepth = 15          # ↑ Allow deeper NUTS trees; avoids hitting limit at 10
+#   ),
+#   prior     = priors,
+#   family = gompertz_family,
+#   stanvars = stanvar(scode = stan_funs, block = "functions"),
+#   combine = TRUE                           #fitted models should be combined into a single fitted model
+# )
 

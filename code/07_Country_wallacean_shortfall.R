@@ -5,59 +5,15 @@ library(dplyr)        # Data manipulation verbs
 library(brms)         # Bayesian multilevel models interface
 library(arrow)
 
-fit <- readRDS("output/model/country_wallacean_all.rds") 
-comparison_loo <- loo_compare(fit$lognormal, 
-                              fit$gamma,
-                              fit$exponential,
-                              fit$weibull,
-                              model_names = names(fit), 
-                              criterion = "loo") %>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-comparison_waic <- loo_compare(fit$lognormal,
-                               fit$gamma,
-                               fit$exponential,
-                               fit$weibull,
-                               model_names = names(fit),
-                               criterion = "waic")%>%
-  as.data.frame()%>%
-  tibble::rownames_to_column(var = "model")
-
-bayes_r2_results <- lapply(fit, bayes_R2)
-bayes_r2_df <- do.call(rbind, lapply(names(bayes_r2_results), function(model) {
-  r2_data <- bayes_r2_results[[model]]
-  data.frame(
-    model = model,
-    bayes_r2_estimate = r2_data["R2", "Estimate"],
-    bayes_r2_se = r2_data["R2", "Est.Error"],
-    bayes_r2_2.5 = r2_data["R2", "Q2.5"],
-    bayes_r2_97.5 = r2_data["R2", "Q97.5"]
-  )
-}))
-
-model_results <- comparison_loo %>%
-  left_join(bayes_r2_df, by = "model") %>%
-  mutate(shortfall = "Wallacean")
-
-write.csv(model_results, paste0("output/tables/country_wallacean_model_comparison.csv"), row.names = FALSE)
-rm(comparison_loo,bayes_r2_df,bayes_r2_results,model_results)
-
-################################################################################
-# ------------------------------------------------------------------------------
-# Estimating Wallacean shortfalls (number of species lacking georeferenced
-# occurrence records) at continent, country, and family levels
-# ------------------------------------------------------------------------------
-
 # ============================================================
 # Load country-level data and construct species × continent table
 # ============================================================
 source("code/functions/xxx.r")
-data_W <- readRDS("output/stan_survdata_country_wallacean.rds")
-cas <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
-data_W <- data_W %>% 
-  left_join(cas[, c(5,2)], by = "valid_name")
+source("code/functions/gompertz_family.R")
+data_W <- readRDS("output/stan_survdata_country_wallacean_single.rds")
+fit <- readRDS("output/model/country_wallacean_gompertz_full.rds")
 wal_res <- compute_Wallacean_prob(
-  fit          = fit$lognormal,
+  fit          = fit,
   year         = 2025,
   data         = data_W,
   year_var     = "year_description",
@@ -74,15 +30,15 @@ wallace_df <- cbind(data_W,wal_res$summary)
 continent_wallace <- wallace_df %>%
   dplyr::filter(event == 0) %>%
   dplyr::distinct(valid_name, continent, .keep_all = TRUE) %>%
-    dplyr::add_count(valid_name, name = "n_continent") %>%
+  dplyr::add_count(valid_name, name = "n_continent") %>%
   dplyr::mutate(weight = 1 / n_continent) %>%
   dplyr::group_by(continent) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc    = sum(weight * prob_nongeoloc_mean),
+    SRnoloc    = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"
@@ -100,10 +56,10 @@ global_wallace <- wallace_df %>%
   dplyr::mutate(weight = 1 / n_continent) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc     = sum(weight * prob_nongeoloc_mean),
+    SRnoloc     = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll  = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul  = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"
@@ -121,7 +77,7 @@ final_continent_global <- dplyr::bind_rows(
   continent_wallace
 ) %>%
   mutate(
-    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_nongeoloc_mean,prob_nongeoloc_lower,prob_nongeoloc_upper),
+    prob_display   = sprintf("%.3f (%.3f–%.3f)", prob_nongeoloc_median,prob_nongeoloc_lower,prob_nongeoloc_upper),
     SRgeoloc_display = sprintf("%d (%d–%d)", SRnoloc, SRnoloc_ll, SRnoloc_ul)
   ) %>%
   select(
@@ -145,10 +101,10 @@ country_wallace <- wallace_df %>%
   dplyr::group_by(iso3) %>%
   dplyr::summarise(
     n_nongeoloc = sum(weight),
-    prob_nongeoloc_mean  = sum(weight * prob_nongeoloc_mean)  / sum(weight),
+    prob_nongeoloc_median  = sum(weight * prob_nongeoloc_median)  / sum(weight),
     prob_nongeoloc_lower = sum(weight * prob_nongeoloc_lower) / sum(weight),
     prob_nongeoloc_upper = sum(weight * prob_nongeoloc_upper) / sum(weight),
-    SRnoloc    = sum(weight * prob_nongeoloc_mean),
+    SRnoloc    = sum(weight * prob_nongeoloc_median),
     SRnoloc_ll = sum(weight * prob_nongeoloc_lower),
     SRnoloc_ul = sum(weight * prob_nongeoloc_upper),
     .groups = "drop"
@@ -200,17 +156,17 @@ calculate_species_percentages <- function(data) {
   percentage_gt_threshold_high_ul <- round((countrys_gt_threshold_high_ul / total_country_mean) * 100, 2)
   
   # Print results
-  cat(sprintf("\n%% countrys with x < %.0f of undescribed species(mean): %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x < %.0f of undescribed species(mean): %.2f%%",
               threshold_low, percentage_lt_threshold_low_mean))
-  cat(sprintf("\n%% countrys with x < %.0f of undescribed species(ll): %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x < %.0f of undescribed species(ll): %.2f%%",
               threshold_low, percentage_lt_threshold_low_ll))
-  cat(sprintf("\n%% countrys with x < %.0f of undescribed species(ul): %.2f%%\n",
+  cat(sprintf("\n%% Drainage countrys with x < %.0f of undescribed species(ul): %.2f%%\n",
               threshold_low, percentage_lt_threshold_low_ul))
-  cat(sprintf("\n%% countrys with x > %.0f of undescribed species(mean): %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x > %.0f of undescribed species(mean): %.2f%%",
               threshold_high, percentage_gt_threshold_high_mean))
-  cat(sprintf("\n%% countrys with x > %.0f of undescribed species(ll): %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x > %.0f of undescribed species(ll): %.2f%%",
               threshold_high, percentage_gt_threshold_high_ll))
-  cat(sprintf("\n%% countrys with x > %.0f of undescribed species(ul): %.2f%%",
+  cat(sprintf("\n%% Drainage countrys with x > %.0f of undescribed species(ul): %.2f%%",
               threshold_high, percentage_gt_threshold_high_ul))
 }
 
@@ -226,4 +182,4 @@ country_wallace %>%
 
 calculate_species_percentages(country_wallace)
 
-rm(country_wallace,continent)
+rm(country_wallace,country)
