@@ -29,9 +29,12 @@ Before running any analysis scripts, download the **input/** and **output/** dir
 
 This repository is organized as follows:
 
+
 ```text
 /project_root
 ├── /code                                # Core analysis scripts, to be executed sequentially for full reproducibility.
+│
+│ ├── setup_r_packages.R                 # install main packages
 │
 │ ├── 00_Get_fishtree.R                  # Retrieve and preprocess the global freshwater fish phylogeny.
 │ ├── 00_Get_futurestream.R              # Download and prepare FutureStreams river network data.
@@ -52,7 +55,6 @@ This repository is organized as follows:
 │ ├── 03_Basin_elevation.R               # Basin-level elevation statistics.
 │ ├── 03_Basin_human_density.R           # Human population density aggregated by basin.
 │ ├── 03_Basin_latitude.R                # Latitudinal position of drainage basins.
-│ ├── 03_Basin_preserved_specimen.R      # Preserved specimen counts per basin.
 │ ├── 03_Basin_range_size.R              # Species geographic range size at the basin scale.
 │ ├── 03_Basin_rarity.R                  # Basin-level species rarity metrics.
 │ ├── 03_Basin_sampling_effort.R         # Occurrence-based sampling effort per basin.
@@ -64,7 +66,6 @@ This repository is organized as follows:
 │ ├── 04_Country_elevation.R             # Country-level elevation.
 │ ├── 04_Country_human_density.R         # Human population density at the country level.
 │ ├── 04_Country_latitude.R              # Country centroid latitude.
-│ ├── 04_Country_preserved_specimen.R    # Preserved specimen counts per country.
 │ ├── 04_Country_range_size.R            # Species range size summarized by country.
 │ ├── 04_Country_rarity.R                # Country-level species rarity.
 │ ├── 04_Country_sampling_effort.R       # Occurrence sampling effort by country.
@@ -94,7 +95,7 @@ This repository is organized as follows:
 │ ├── Dawinian_deficits_basin.R          # Aggregated Darwinian knowledge deficits at the basin scale.
 │ ├── Dawinian_deficits_country.R        # Aggregated Darwinian knowledge deficits at the country scale.
 │
-│ ├── Model_report.R                     # Automated model diagnostics and summary tables.
+│ ├── preserved_specimen.R               # Quantification of Preserved specimen.
 │
 │ ├── Cost_Taxonomy.R                    # Cost estimation for taxonomic research.
 │ ├── Cost_field_sampling.R              # Cost estimation for field sampling campaigns.
@@ -104,8 +105,10 @@ This repository is organized as follows:
 │
 │ ├── functions/                         # Custom helper functions used throughout the pipeline.
 │ │   ├── clean_species_occ.R            # Species-level occurrence data cleaning functions.
+│ │   ├── gompertz_family.R              # Custom Gompertz distribution.
 │ │   ├── TAE_function.R                 # Functions related to Taxonomic Effort.
 │ │   ├── xxx.R                          # Additional utility functions.
+│ │   ├── yyy.R                          # Additional utility functions.
 │ │   └── zzz.R                          # Additional utility functions.
 │ 
 │ └── exec/
@@ -134,7 +137,7 @@ This repository is organized as follows:
 │ ├── Figure_2.html                      # Rendered HTML output for Figure 2.
 │ ├── Figure_3.html                      # Rendered HTML output for Figure 3.
 │ ├── Figure_4.html                      # Rendered HTML output for Figure 4.
-│ ├── Figure_S01-S19.R                   # Scripts for supplementary figures.
+│ ├── Figure_S01-S22.R                   # Scripts for supplementary figures.
 │
 └── FW_Fish_Shortfall.Rproj              # RStudio project file managing paths and workflow.
 
