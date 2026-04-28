@@ -67,187 +67,6 @@ tag_strategy <- function(df, q = 0.10) {
     ungroup()
 }
 
-# Build a consistent “Pareto scatter + frontier path + labels” plot
-# NOTE: keep your aesthetics, just encapsulate to reduce repetition
-plot_pareto_2d <- function(df, xvar, yvar,
-                           best_pref, worst_pref,
-                           xlab, ylab,
-                           legend = TRUE,
-                           legend_pos = c(0.2, 0.90)) {
-  
-  df_best  <- df %>% group_by(biogeographic_realm) %>% group_modify(~ psel(.x, best_pref))  %>% ungroup()
-  df_worst <- df %>% group_by(biogeographic_realm) %>% group_modify(~ psel(.x, worst_pref)) %>% ungroup()
-  
-  # label each realm at its left-most point on the chosen frontier
-  lab_best <- df_best %>%
-    group_by(biogeographic_realm) %>%
-    filter(.data[[xvar]] == min(.data[[xvar]], na.rm = TRUE)) %>%
-    slice(1) %>%
-    ungroup()
-  
-  lab_worst <- df_worst %>%
-    group_by(biogeographic_realm) %>%
-    filter(.data[[xvar]] == min(.data[[xvar]], na.rm = TRUE)) %>%
-    slice(1) %>%
-    ungroup()
-  
-  p <- ggplot() +
-    geom_point(
-      data = df,
-      aes(x = .data[[xvar]], y = .data[[yvar]], colour = front_rank),
-      size = 1, alpha = 0.5
-    ) +
-    # --- best frontier
-    geom_point(
-      data = df_best,
-      aes(x = .data[[xvar]], y = .data[[yvar]], group = biogeographic_realm),
-      shape = 21, fill = "#00B050", colour = "black", size = 1, stroke = 0.3
-    ) +
-    geom_path(
-      data = df_best %>% group_by(biogeographic_realm) %>% arrange(.data[[xvar]], .by_group = TRUE) %>% ungroup(),
-      aes(x = .data[[xvar]], y = .data[[yvar]], lty = biogeographic_realm),
-      linewidth = 0.2, colour = "#00B050", show.legend = FALSE,
-      arrow = arrow(type = "closed", length = unit(0.2, "cm"))
-    ) +
-    geom_text_repel(
-      data = lab_best,
-      aes(x = .data[[xvar]], y = .data[[yvar]], label = biogeographic_realm),
-      nudge_x = 0.03,direction = "x", point.padding = 0.2,vjust = -2,
-      segment.color = NA, size = 2, colour = "black"
-    ) +
-    # --- worst frontier
-    geom_point(
-      data = df_worst,
-      aes(x = .data[[xvar]], y = .data[[yvar]], group = biogeographic_realm),
-      shape = 21, fill = "#FFC000", colour = "black", size = 1, stroke = 0.3
-    ) +
-    geom_path(
-      data = df_worst %>% group_by(biogeographic_realm) %>% arrange(.data[[xvar]], .by_group = TRUE) %>% ungroup(),
-      aes(x = .data[[xvar]], y = .data[[yvar]], lty = biogeographic_realm),
-      linewidth = 0.2, colour = "#FFC000", show.legend = FALSE,
-      arrow = arrow(type = "closed", length = unit(0.2, "cm"))
-    ) +
-    geom_text_repel(
-      data = lab_worst,
-      aes(x = .data[[xvar]], y = .data[[yvar]], label = biogeographic_realm),
-      nudge_x = 0.03,direction = "y", point.padding = 0.2,hjust = -2,
-      segment.color = NA, size = 2, colour = "black"
-    ) +
-    scale_colour_gradientn(
-      name = "Pareto frontier",
-      colours = c("#FFC000", "#BFBFBF", "#00B050"),
-      limits = c(0, 1), breaks = c(0, 1), labels = c("Worst", "Best"),
-      guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish")
-    ) +
-    labs(x = xlab, y = ylab) +
-    theme_classic() +
-    theme(
-      axis.text  = element_text(colour = "black", size = 7),
-      axis.title = element_text(colour = "black", size = 8),
-      legend.title = element_text(size = 6, hjust = 0.5),
-      legend.text  = element_text(size = 5),
-      legend.key.width = unit(0.3, "cm"),
-      legend.key.height = unit(0.15, "cm"),
-      legend.background = element_blank(),
-      legend.title.position = "top",
-      legend.direction = "horizontal",
-      plot.margin = margin(0, 0, 0, 0)
-    )
-  
-  if (legend) {
-    p + theme(legend.position = legend_pos)
-  } else {
-    p + theme(legend.position = "none")
-  }
-}
-
-# Denominator for efficiency E = Shortfall / cost(scenario)
-get_cost <- function(df, scenario) {
-  if (scenario == "scenario_1") {
-    df$Investment
-  } else if (scenario == "scenario_2") {
-    df$Socioeconomics
-  } else if (scenario == "scenario_3") {
-    df$Governance
-  } else if (scenario == "scenario_4") {
-    df$Investment * df$Socioeconomics * df$Governance
-  } else {
-    stop("Unknown scenario: ", scenario)
-  }
-}
-
-#' Compute Best-Worst Ratio of Efficiency (BWR)
-#'
-#' This function calculates the ratio of mean efficiency between `best` and `worst` strategy groups,
-#' along with key statistical metrics (sample size, standard error, coefficient of variation, 95% CI)
-#' required for scientific reporting.
-#' @param df A data frame containing strategy labels, scenario identifiers and target variable.
-#' @param scenario Character string specifying the scenario to filter.
-#' @param S_var Character string of the target variable name for efficiency calculation.
-#' @param conf_level Numeric value of confidence level for CI calculation (default = 0.95).
-#' @return A tibble with comprehensive statistics of BWR_S.
-#' @export
-compute_BWR <- function(df, scenario, S_var, conf_level = 0.95) {
-  if (!is.data.frame(df)) stop("Argument 'df' must be a valid data frame")
-  if (!scenario %in% df$scenario) stop("Scenario '", scenario, "' not found in df$scenario")
-  if (!S_var %in% colnames(df)) stop("Variable '", S_var, "' not found in data frame columns")
-  
-  df_filtered <- df %>%
-    filter(scenario == !!scenario) %>%
-    tidyr::drop_na(dplyr::all_of(S_var))
-  
-  best_grp  <- df_filtered %>% filter(strategy == "best")
-  worst_grp <- df_filtered %>% filter(strategy == "worst")
-  
-  E_best <- if (nrow(best_grp)  > 0) best_grp[[S_var]]  / get_cost(best_grp,  scenario) else numeric(0)
-  E_worst <- if (nrow(worst_grp) > 0) worst_grp[[S_var]] / get_cost(worst_grp, scenario) else numeric(0)
-  
-  E_best  <- E_best[is.finite(E_best) & E_best > 0]
-  E_worst <- E_worst[is.finite(E_worst) & E_worst > 0]
-  
-  if (length(E_best) == 0 | length(E_worst) == 0) {
-    return(tibble::tibble(
-      scenario = scenario, S_var = S_var,
-      n_best = length(E_best), n_worst = length(E_worst),
-      mean_best = NA_real_, mean_worst = NA_real_, mean_ratio = NA_real_,
-      se_best = NA_real_, se_worst = NA_real_,
-      ci_lower = NA_real_, ci_upper = NA_real_,
-      cv_best = NA_real_, cv_worst = NA_real_
-    ))
-  }
-  
-  mean_best  <- mean(E_best)
-  mean_worst <- mean(E_worst)
-  se_best    <- sd(E_best)  / sqrt(length(E_best))
-  se_worst   <- sd(E_worst) / sqrt(length(E_worst))
-  cv_best    <- (sd(E_best)  / mean_best)  * 100
-  cv_worst   <- (sd(E_worst) / mean_worst) * 100
-  mean_ratio <- mean_best / mean_worst
-  
-  se_log_ratio <- sqrt((se_best / mean_best)^2 + (se_worst / mean_worst)^2)
-  df_total     <- length(E_best) + length(E_worst) - 2
-  t_crit       <- qt((1 + conf_level) / 2, df = df_total)
-  
-  log_ratio <- log(mean_ratio)
-  ci_lower  <- exp(log_ratio - t_crit * se_log_ratio)
-  ci_upper  <- exp(log_ratio + t_crit * se_log_ratio)
-  
-  tibble::tibble(
-    scenario = scenario,
-    S_var = S_var,
-    n_best = length(E_best),
-    n_worst = length(E_worst),
-    mean_best = mean_best,
-    mean_worst = mean_worst,
-    mean_ratio = mean_ratio,
-    se_best = se_best,
-    se_worst = se_worst,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper,
-    cv_best = cv_best,
-    cv_worst = cv_worst
-  )
-}
 
 # -----------------------------
 # Data I/O (here)
@@ -299,243 +118,47 @@ basin_shortfalls <- read_csv_h("output", "tables", "basin_shortfalls.csv") %>%
 # data <- data %>% filter(basin_id %in% basin_shortfalls)
 data <- data %>% filter(basin_id %in% basin_shortfalls)
 
-# Normalize 0–1 (keep your intent)
-data <- data %>%
-  mutate(
-    Investment     = min_max_normalize_safe(Investment),
-    Shortfall      = min_max_normalize_safe(Shortfall),
-    Socioeconomics = min_max_normalize_safe(Socioeconomics),
-    Governance     = min_max_normalize_safe(Governance)
-  )
+##################################################################################
+df_nsc <- shortfall %>% left_join(biogeographic_list[,c(1,3)],by = "basin_id")
 
-rm(cost, sdg, sdg.pca, shortfall, biogeographic_list, basin_shortfalls)
+basins <- df_nsc %>% select(basin_id,NSCI_norm,biogeographic_realm) %>% na.omit()
+# Step 1: Realm-based expectation model
+model <- lm(NSCI_norm ~ biogeographic_realm, data = basins)
 
-################################################################################
-# Realm-specific Pareto frontier
+# Step 2: Realm-adjusted residuals
+basins$resid_NSCI <- residuals(model)
 
-#High Shortfall × High Socioeconomics（Best）
-#High Shortfall × Low Socioeconomics（Worst）
-# Figure X. Trade-off between knowledge shortfall and socioeconomic feasibility, with Pareto-optimal strategic priorities highlighted.
+# Step 3: Compute μ and σ of residuals
+mu_resid <- mean(basins$resid_NSCI, na.rm = TRUE)
+sd_resid <- sd(basins$resid_NSCI, na.rm = TRUE)
 
-# ------------------------------------------------------------
-# Prepare data and specify objective directions
-#    Shortfall  : higher is better  → multiply by -1
-#    Investment : lower is better  → keep unchanged
-# ------------------------------------------------------------
-df1 <- data %>%
-  select(basin_id, biogeographic_realm, Shortfall, Investment) %>%
-  filter(!is.na(Investment), !is.na(Shortfall)) %>%
-  mutate(
-    # Convert objectives to minimization form for nds_rank():
-    # High Shortfall (good) → -Shortfall (so smaller = better)
-    Shortfall_obj  = -Shortfall,
-    Investment_obj =  Investment # low Investment (good) → keep as original value
-  )
+# Step 4: Cutoff values consistent with the published method
+z <- 1.96
+upper_cut <- mu_resid + z * sd_resid
+lower_cut <- mu_resid - z * sd_resid
 
-# realm-conditional prioritization
-# To avoid dominance of well-sampled and highly accessible regions in a single global ranking, 
-# we conducted realm-conditioned prioritization and identified high-priority basins within each biogeographic realm, 
-# ensuring representation across major biogeographic species pools while retaining comparable multi-objective trade-offs.
-df_plot_realm_1 <- add_realm_front(df1, c("Shortfall_obj", "Investment_obj")) %>%
-  tag_strategy(q = 0.10)
+# Step 5: Classification
+basins$NSCI_high   <- basins$resid_NSCI >= upper_cut
+basins$NSCI_low    <- basins$resid_NSCI <= lower_cut
+basins$NSCI_normal <- basins$resid_NSCI > lower_cut & basins$resid_NSCI < upper_cut
+shortfall_8 <- basins %>% filter(NSCI_high == TRUE) %>% pull(basin_id)
 
-p1 <- plot_pareto_2d(
-  df_plot_realm_1,
-  xvar = "Investment", yvar = "Shortfall",
-  best_pref  = high(Shortfall) * low(Investment),
-  worst_pref = low(Shortfall)  * high(Investment),
-  xlab = "Investment", ylab = "Shortfall (NSCI)",
-  legend = TRUE, legend_pos = c(0.2, 0.90)
-)
 
-################################################################################
-# Prepare data: Shortfall + Socioeconomics
-df2 <- data %>%
-  select(basin_id, biogeographic_realm, Shortfall, Socioeconomics) %>%
-  filter(!is.na(Shortfall), !is.na(Socioeconomics)) %>%
-  mutate(
-    # Both objectives need to be maximized,
-    # so convert them into minimization for nds_rank():
-    Shortfall_obj = -Shortfall,       # higher shortfall = better priority
-    Socio_obj     = -Socioeconomics   # higher socioeconomic capacity = better
-  )
+data <- data %>% filter(basin_id %in% unique(basin_shortfalls, shortfall_8))
 
-df_plot_realm_2 <- add_realm_front(df2, c("Shortfall_obj", "Socio_obj")) %>%
-  tag_strategy(q = 0.10)
-
-p2 <- plot_pareto_2d(
-  df_plot_realm_2,
-  xvar = "Socioeconomics", yvar = "Shortfall",
-  best_pref  = high(Shortfall) * high(Socioeconomics),
-  worst_pref = low(Shortfall)  * low(Socioeconomics),
-  xlab = "Socioeconomics", ylab = "Shortfall (NSCI)",
-  legend = FALSE
-)
-
-################################################################################
-#    Goal: prioritize basins with
-#      - high Shortfall   (large knowledge gaps)
-#      - high Governance  (strong capacity to fill those gaps)
-# ------------------------------------------------------------
-df3 <- data %>%
-  select(basin_id, biogeographic_realm, Governance, Shortfall) %>%
-  filter(!is.na(Governance), !is.na(Shortfall)) %>%
-  mutate(
-    # Convert both objectives to "minimization" form for nds_rank():
-    # We want to MAXIMIZE Shortfall → use -Shortfall
-    Shortfall_obj  = -Shortfall,
-    # We want to MAXIMIZE Governance → use -Governance
-    Governance_obj = -Governance
-  )
-
-df_plot_realm_3 <- add_realm_front(df3, c("Shortfall_obj", "Governance_obj")) %>%
-  tag_strategy(q = 0.10)
-
-p3 <- plot_pareto_2d(
-  df_plot_realm_3,
-  xvar = "Governance", yvar = "Shortfall",
-  best_pref  = high(Shortfall) * high(Governance),
-  worst_pref = low(Shortfall)  * low(Governance),
-  xlab = "Governance", ylab = "Shortfall (NSCI)",
-  legend = FALSE
-)
-
-################################################################################
-# ------------------------------------------------------------
-#  Prepare data for 4-objective trade-off:
-#    Goal: High Shortfall × Low Investment × High Socioeconomics × High Governance
-#
-#    Assumptions:
-#    - Shortfall:       higher = larger knowledge gaps (priority ↑)
-#    - Investment:      higher = higher total cost (priority ↓)
-#    - Socioeconomics:  higher = stronger socioeconomic capacity
-#    - Governance:      higher = stronger institutional/governance capacity
-# ------------------------------------------------------------
-df4 <- data %>%
-  select(basin_id, biogeographic_realm, Investment, Socioeconomics, Governance, Shortfall) %>%
-  na.omit() %>%
-  mutate(
-    # Convert all objectives to "minimize" form for nds_rank():
-    # We want to MAXIMIZE Shortfall → minimize -Shortfall
-    Shortfall_obj      = -Shortfall,
-    # We want to MINIMIZE Investment → keep as is
-    Investment_obj     =  Investment,
-    # We want to MAXIMIZE Socioeconomics → minimize -Socioeconomics
-    Socioeconomics_obj = -Socioeconomics,
-    # We want to MAXIMIZE Governance → minimize -Governance
-    Governance_obj     = -Governance
-  )
-
-df_plot_realm_4 <- add_realm_front(df4, c("Shortfall_obj", "Investment_obj", "Socioeconomics_obj", "Governance_obj")) %>%
-  tag_strategy(q = 0.10)
-
-p4 <- GGally::ggparcoord(
-  df_plot_realm_4,
-  columns = c(7, 8, 9, 10),          # keep your original column indices
-  groupColumn = 12,                  # front_rank
-  scale = "uniminmax",
-  showPoints = FALSE,
-  alphaLines = 0.15
-) +
-  scale_colour_gradientn(colours = c("#FFC000", "grey90", "#00B050")) +
-  theme_minimal() +
-  scale_x_discrete(
-    expand = c(0.02, 0.05),
-    labels = c("Shortfall \n (NSCI)", "Investment", "Socioeconomics", "Governance")
-  ) +
-  xlab("") +
-  ylab("") +
-  theme(
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor.y = element_blank(),
-    panel.grid.major.x = element_line(color = "grey50", linewidth = 1),
-    legend.position = "none",
-    axis.text.x = element_text(colour = "black", size = 6.5),
-    axis.text.y = element_text(colour = "black", size = 7),
-    plot.margin = margin(0, 0, 0, 0)
-  )
-
-################################################################################
-# Best and worst basins were defined as the upper and lower q-quantiles of the continuous 
-# Pareto prioritization gradient (front_scaled), with sensitivity analyses across alternative thresholds.
-
-front <- bind_rows(
-  df_plot_realm_1 %>% select(biogeographic_realm, basin_id, front_scaled, strategy) %>% mutate(scenario = "scenario_1"),
-  df_plot_realm_2 %>% select(biogeographic_realm, basin_id, front_scaled, strategy) %>% mutate(scenario = "scenario_2"),
-  df_plot_realm_3 %>% select(biogeographic_realm, basin_id, front_scaled, strategy) %>% mutate(scenario = "scenario_3"),
-  df_plot_realm_4 %>% select(biogeographic_realm, basin_id, front_scaled, strategy) %>% mutate(scenario = "scenario_4")
-)
-
-shortfall2 <- read_rds_h("input", "processed", "basin_shortfall.rds")
-dt <- front %>% left_join(shortfall2[, c(1, 7:9)], by = "basin_id")
-names(dt)[6:8] <- c("LS", "WS", "DS")
-
-dt <- dt %>%
-  mutate(
-    LS = min_max_normalize_safe(LS, epsilon = 1e-3),
-    WS = min_max_normalize_safe(WS, epsilon = 1e-3),
-    DS = min_max_normalize_safe(DS, epsilon = 1e-3)
-  )
-
-dt <- dt %>% left_join(data[, 1:5], by = "basin_id")
-
-biogeographic <- read_csv_h("input", "raw", "biogeographic_list.csv")
-dt <- dt %>% left_join(biogeographic, by = "basin_id")
-
-# -----------------------------
-# BWR results (per scenario × LS/WS/DS)
-# -----------------------------
-scenarios  <- unique(dt$scenario)
-shortfalls <- c("LS", "WS", "DS")
-
-BWR_results <- tidyr::expand_grid(
-  scenario = scenarios,
-  S_var = shortfalls
-) %>%
-  mutate(stats = purrr::map2(scenario, S_var, ~ compute_BWR(dt, .x, .y))) %>%
-  select(-scenario, -S_var) %>%
-  tidyr::unnest(cols = stats) %>%
-  rename(
-    bwr_mean_ratio = mean_ratio,
-    ci_95_lower    = ci_lower,
-    ci_95_upper    = ci_upper,
-    cv_best_pct    = cv_best,
-    cv_worst_pct   = cv_worst
-  )
-
-BWR_results$S_var <- factor(BWR_results$S_var, levels = c("LS", "WS", "DS"))
-BWR_results
-
-# small barplot helper to avoid 4 copies
-plot_bwr_bar <- function(df, scenario_id) {
-  ggplot(
-    df %>% filter(scenario == scenario_id),
-    aes(x = S_var, y = bwr_mean_ratio, ymin = ci_95_lower, ymax = ci_95_upper)
-  ) +
-    geom_col(fill = "#3182bd", alpha = 0.5, width = 0.6) +
-    geom_errorbar(width = 0.2, linewidth = 0.2, color = "grey") +
-    labs(x = "Shortfall", y = "BWR (best-to-worst ratio)") +
-    theme_classic() +
-    scale_y_continuous(limits = c(0, 5), expand = c(0, 0)) +
-    theme(
-      axis.text = element_text(size = 5, color = "black"),
-      axis.title = element_text(size = 6, color = "black"),
-      axis.line = element_line(linewidth = 0.2),
-      axis.ticks = element_line(linewidth = 0.2),
-      axis.ticks.length = unit(0.05, "cm"),
-      plot.background = element_blank(),
-      panel.background = element_blank(),
-      legend.position = "none",
-      plot.margin = margin(0, 0, 0, 0)
-    )
+min_max_normalize_safe <- function(x, epsilon = 1e-6) {
+  min_val <- min(x,na.rm = T)
+  max_val <- max(x,na.rm = T)
+  range_val <- max_val - min_val + epsilon
+  return((x - min_val) / range_val)
 }
 
-pp1_r <- plot_bwr_bar(BWR_results, "scenario_1")
-pp2_r <- plot_bwr_bar(BWR_results, "scenario_2")
-pp3_r <- plot_bwr_bar(BWR_results, "scenario_3")
-pp4_r <- plot_bwr_bar(BWR_results, "scenario_4")
-
-################################################################################
+data$Investment <- min_max_normalize_safe(data$Investment)
+data$Shortfall <- min_max_normalize_safe(data$Shortfall)
+data$Socioeconomics <- min_max_normalize_safe(data$Socioeconomics)
+data$Governance <- min_max_normalize_safe(data$Governance)
+rm(cost,sdg,sdg.pca,shortfall,biogeographic_list,basin_shortfalls,min_max_normalize_safe)
+#-------------------------------------------------------------------------------
 # Maps (use here for inputs, keep your styling)
 library(sf)
 library(rnaturalearth)
@@ -551,78 +174,571 @@ lat_points <- data.frame(lon = 0, lat = c(-60, 90)) %>%
 projected_points <- st_transform(lat_points, crs = moll_proj)
 y_limits <- st_coordinates(projected_points)[, "Y"]
 
-# small helper for map panel (avoid repeating the same ggplot block 4 times)
-make_front_map <- function(inland, world_map, df_front, fill_col = "front_rank") {
-  case <- inland %>% left_join(df_front, by = "basin_id")
-  ggplot() +
-    ggrastr::rasterise(
-      geom_sf(
-        data = world_map %>% st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")),
-        fill = "#d3d3d3", colour = NA
-      ),
-      dpi = 300
-    ) +
-    ggrastr::rasterise(
-      geom_sf(data = case, aes(fill = .data[[fill_col]]), colour = "white", linewidth = 0.03),
-      dpi = 300
-    ) +
-    scale_fill_gradientn(
-      name = "Pareto frontier",
-      colours = c("#FFC000", "grey90", "#00B050"),
-      limits = c(0, 1),
-      breaks = c(0, 1),
-      na.value = "grey70",
-      labels = c("Worst", "Best"),
-      guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish")
-    ) +
-    theme_void() +
-    coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE) +
-    theme(legend.position = "none", plot.margin = margin(0, 0, 0, 0))
-}
-
-# scenario maps (front_rank lives in each df_plot_realm_X)
-map1 <- make_front_map(inland, world_map, df_plot_realm_1[, c("basin_id", "front_rank")])
-map2 <- make_front_map(inland, world_map, df_plot_realm_2[, c("basin_id", "front_rank")])
-map3 <- make_front_map(inland, world_map, df_plot_realm_3[, c("basin_id", "front_rank")])
-map4 <- make_front_map(inland, world_map, df_plot_realm_4[, c("basin_id", "front_rank")])
-
-# Combine: add your text labels exactly as before
-pp1 <- ggdraw() +
-  draw_plot(map1, 0, 0, 1, 1) +
-  draw_plot(pp1_r, 0.06, 0.02, 0.2, 0.8) +
-  draw_label(label = expression(Delta[NSCI] == -0.25), x = 0.58, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"), x = 0.8, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression(BWR[NSCI] * " = 5.78"), x = 0.3, y = 0.98, hjust = 1, vjust = 1, size = 7.5)
-
-pp2 <- ggdraw() +
-  draw_plot(map2, 0, 0, 1, 1) +
-  draw_plot(pp2_r, 0.06, 0.02, 0.2, 0.8) +
-  draw_label(label = expression(Delta[NSCI] == -0.35), x = 0.58, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"), x = 0.8, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression(BWR[NSCI] * " = 2.74"), x = 0.3, y = 0.98, hjust = 1, vjust = 1, size = 7.5)
-
-pp3 <- ggdraw() +
-  draw_plot(map3, 0, 0, 1, 1) +
-  draw_plot(pp3_r, 0.06, 0.02, 0.2, 0.8) +
-  draw_label(label = expression(Delta[NSCI] == -0.34), x = 0.58, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"), x = 0.8, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression(BWR[NSCI] * " = 4.80"), x = 0.3, y = 0.98, hjust = 1, vjust = 1, size = 7.5)
-
-pp4 <- ggdraw() +
-  draw_plot(map4, 0, 0, 1, 1) +
-  draw_plot(pp4_r, 0.06, 0.02, 0.2, 0.8) +
-  draw_label(label = expression(Delta[NSCI] == -0.20), x = 0.58, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"), x = 0.8, y = 0.08, hjust = 1, vjust = 1, size = 7.2) +
-  draw_label(label = expression(BWR[NSCI] * " = 1.66"), x = 0.3, y = 0.98, hjust = 1, vjust = 1, size = 7.5)
 
 ################################################################################
-# Arrange multi-panel figure
+# Biological-urgency baseline
+df_plot_realm_1 <- data
+
+# Linear model
+model <- lm(Shortfall ~ biogeographic_realm, data = df_plot_realm_1)
+
+# Realm-adjusted residuals
+df_plot_realm_1$residuals <- residuals(model)
+
+# Summary stats
+res_mean <- mean(df_plot_realm_1$residuals, na.rm = TRUE)
+res_sd   <- sd(df_plot_realm_1$residuals, na.rm = TRUE)
+
+critical_value_upper <- res_mean + 1.96 * res_sd
+critical_value_lower <- res_mean - 1.96 * res_sd
+
+# Color gradient functions
+get_green_shade  <- colorRampPalette(c("#BFBFBF", "#00B050"))
+get_yellow_shade <- colorRampPalette(c("#FFC000", "#BFBFBF"))
+
+# Function to map residuals to colors
+residual_to_fill <- function(x, min_res, max_res) {
+  sapply(x, function(v) {
+    if (is.na(v)) return(NA_character_)
+    
+    if (v < 0) {
+      # yellow -> grey
+      idx <- floor(100 * (v - min_res) / (0 - min_res)) + 1
+      idx <- max(1, min(100, idx))
+      get_yellow_shade(100)[idx]
+    } else {
+      # grey -> green
+      idx <- floor(100 * (v - 0) / (max_res - 0)) + 1
+      idx <- max(1, min(100, idx))
+      get_green_shade(100)[idx]
+    }
+  })
+}
+
+min_res <- min(df_plot_realm_1$residuals, na.rm = TRUE)
+max_res <- max(df_plot_realm_1$residuals, na.rm = TRUE)
+
+# Add fronts and fill to df_plot_realm_1
+df_plot_realm_1 <- df_plot_realm_1 %>%
+  mutate(
+    fronts = case_when(
+      residuals > critical_value_upper ~ "best",
+      residuals < critical_value_lower ~ "worst",
+      TRUE ~ "not_significant"
+    ),
+    fill = residual_to_fill(residuals, min_res, max_res)
+  )
+
+# Histogram breaks
+breaks <- seq(min_res, max_res, length.out = 16)
+
+# Histogram data
+hist_data <- hist(df_plot_realm_1$residuals, breaks = breaks, plot = FALSE)
+
+hist_df <- data.frame(
+  xmin = head(hist_data$breaks, -1),
+  xmax = tail(hist_data$breaks, -1),
+  xmid = hist_data$mids,
+  count = hist_data$counts,
+  density = hist_data$density
+)
+
+# Map fill colors to histogram bins
+hist_df$fill <- residual_to_fill(hist_df$xmid, min_res, max_res)
+
+# Normal curve
+x_vals <- seq(min_res, max_res, length.out = 400)
+curve_df <- data.frame(
+  x = x_vals,
+  y = dnorm(x_vals, mean = res_mean, sd = res_sd) * nrow(df_plot_realm_1) * diff(breaks)[1]
+)
+
+# Label positions
+ymax_hist <- max(hist_df$count, na.rm = TRUE)
+label_y_top <- ymax_hist * 1.08
+label_y_mid <- ymax_hist * 0.62
+
+p1 <- ggplot() +
+  geom_rect(data = hist_df,aes(xmin = xmin, xmax = xmax, ymin = 0, ymax = count),
+            fill = hist_df$fill,color = "grey40",linewidth = 0.2) +
+  # normal curve scaled to counts
+  geom_line(data = curve_df,aes(x = x, y = y),color = "black",linewidth = 0.2) +
+  # critical lines
+  geom_vline(xintercept = critical_value_lower,color = "#FFC000",linetype = 2,linewidth = 0.3) +
+  geom_vline(xintercept = critical_value_upper,color = "#00B050",linetype = 2,linewidth = 0.3) +
+  labs(
+    x = expression(Residuals[NSCI]),
+    y = "Frequency"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  scale_x_continuous(breaks = c(-0.5,0,0.5))+
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 6),
+    axis.text = element_text(colour = "black",size = 5),
+    axis.line = element_line(linewidth = 0.2),
+    axis.ticks = element_line(linewidth = 0.2),
+    axis.ticks.length = unit(0.05, "cm"),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    legend.position = "none",
+    plot.margin = margin(0, 0, 0, 0)
+  )
+
+p1
+
+
+case1 <- inland %>% left_join(df_plot_realm_1[,c(1,7,9)], by = "basin_id")
+pp1 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300) +
+  ggrastr::rasterise(geom_sf(data =case1 ,aes(fill = fill),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_identity(na.value = "#d3d3d3")+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+
+pp1 <- ggdraw() +
+  draw_plot(pp1, 0, 0, 1, 1) +                             
+  draw_plot(p1, 0.06, 0.02, 0.2, 0.5) 
+
+
+################################################################################
+# Prepare data: Shortfall + Investment
+df2 <- data %>%
+  select(basin_id,biogeographic_realm, Shortfall, Investment) %>%
+  filter(!is.na(Investment), !is.na(Shortfall)) %>%
+  mutate(
+    # Convert objectives to minimization form for nds_rank():
+    # High Shortfall (good) → -Shortfall (so smaller = better)
+    Shortfall_obj  = -Shortfall,
+    Investment_obj = Investment # low Investment (good) → keep as original value
+  )
+
+
+df_plot_realm_2 <- add_realm_front(df2, c("Shortfall_obj", "Investment_obj")) %>%
+  tag_strategy(q = 0.10)
+
+p2 <- ggplot() +
+  geom_point(data = df_plot_realm_2,aes(x = Investment,y = Shortfall,colour = front_rank),size  = 0.1,alpha = 0.5) +
+  scale_colour_gradientn(name = "Pareto frontier",colours = c("#FFC000", "#BFBFBF", "#00B050"),
+                         limits = c(0, 1),breaks = c(0, 1), labels = c("Worst","Best"),
+                         guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish"))+
+  labs(x = "Cost", y = expression(Shortfall[NSCI])) +
+  theme_classic() +
+  scale_x_continuous(breaks  = c(0, 0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  theme(
+    axis.text  = element_text(colour = "black", size = 5),
+    axis.title = element_text(colour = "black", size = 6),
+    legend.title = element_text(size = 6, hjust = 0.5),
+    legend.text  = element_text(size = 5),
+    axis.line = element_line(linewidth = 0.2),
+    axis.ticks = element_line(linewidth = 0.2),
+    axis.ticks.length = unit(0.05, "cm"),
+    legend.key.width = unit(0.3,"cm"),
+    legend.key.height = unit(0.15,"cm"),
+    legend.background = element_blank(),
+    legend.position = "none",
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    plot.margin = margin(0,0,0,0)
+  )
+
+p_legend <- ggplot() +
+  geom_point(data = df_plot_realm_2,aes(x = Investment,y = Shortfall,colour = front_rank),size  = 0.1,alpha = 0.5) +
+  scale_colour_gradientn(name = "Pareto frontier",colours = c("#FFC000", "#BFBFBF", "#00B050"),
+                         limits = c(0, 1),breaks = c(0, 1), labels = c("Worst","Best"),
+                         guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish"))+
+  labs(x = "Cost", y = expression(Shortfall[NSCI])) +
+  theme_void() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid = element_blank(),
+    legend.title = element_text(size = 5, hjust = 0.5),
+    legend.text  = element_text(size = 4),
+    legend.key.width = unit(0.2,"cm"),
+    legend.key.height = unit(0.1,"cm"),
+    legend.background = element_blank(),
+    legend.position = "top",  # 图例居中
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    plot.margin = margin(0,0,0,0)
+  )
+
+case2 <- inland %>% left_join(df_plot_realm_2[,c(2,8)], by = "basin_id")
+pp2 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300) +
+  ggrastr::rasterise(geom_sf(data =case2 ,aes(fill = front_rank),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_gradientn(name = "Pareto frontier",
+                       colours = c("#FFC000", "grey90","#00B050"),
+                       limits = c(0, 1),                 
+                       breaks = c(0, 1), 
+                       na.value = "grey70",
+                       labels = c("Worst","Best"),
+                       guide = guide_colbar(
+                         show = c(TRUE, TRUE), 
+                         oob = "squish")
+  )+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+
+pp2 <- ggdraw() +
+  draw_plot(pp2, 0, 0, 1, 1) +                             
+  draw_plot(p2, 0.06, 0.02, 0.2, 0.5) +
+  draw_plot(get_legend(p_legend), 0.07, 0.63, 0.06, 0.03) +
+  draw_label(label = expression(Delta[NSCI] == -0.24),
+             x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
+             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression(BWR[NSCI] * ' = 5.25'),
+             x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+
+
+################################################################################
+#    Goal: prioritize basins with
+#      - high Shortfall   (large knowledge gaps)
+#      - high Socioeconomics  (strong capacity to fill those gaps)
+# ------------------------------------------------------------
+df3 <- data %>%
+  select(basin_id, biogeographic_realm,Shortfall, Socioeconomics) %>%       
+  filter(!is.na(Shortfall), !is.na(Socioeconomics)) %>%
+  mutate(
+    # Both objectives need to be maximized,
+    # so convert them into minimization for nds_rank():
+    Shortfall_obj = -Shortfall, # higher shortfall = better priority
+    Socio_obj = -Socioeconomics # higher socioeconomic capacity = better
+  )
+
+df_plot_realm_3 <- add_realm_front(df3, c("Shortfall_obj", "Socio_obj")) %>%
+  tag_strategy(q = 0.10)
+
+p3 <- ggplot() +
+  geom_point(data = df_plot_realm_3,aes(x = Socioeconomics,y = Shortfall,colour = front_rank),size  = 0.1,alpha = 0.5) +
+  scale_colour_gradientn(name = "Pareto frontier",colours = c("#FFC000", "#BFBFBF", "#00B050"),
+                         limits = c(0, 1),breaks = c(0, 1), labels = c("Worst","Best"),
+                         guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish"))+
+  #coord_fixed(xlim = c(0,1), ylim = c(0,1)) +
+  labs(x = "Income", y = expression(Shortfall[NSCI])) +
+  theme_classic() +
+  scale_x_continuous(breaks  = c(0, 0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  theme(
+    axis.text  = element_text(colour = "black", size = 5),
+    axis.title = element_text(colour = "black", size = 6),
+    legend.title = element_text(size = 6, hjust = 0.5),
+    legend.text  = element_text(size = 5),
+    axis.line = element_line(linewidth = 0.2),
+    axis.ticks = element_line(linewidth = 0.2),
+    axis.ticks.length = unit(0.05, "cm"),
+    legend.key.width = unit(0.3,"cm"),
+    legend.key.height = unit(0.15,"cm"),
+    legend.background = element_blank(),
+    legend.position = "none",
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    plot.margin = margin(0,0,0,0)
+  )
+
+
+case3 <- inland %>% left_join(df_plot_realm_3[,c(2,8)], by = "basin_id")
+pp3 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300)+
+  ggrastr::rasterise(geom_sf(data =case3 ,aes(fill = front_rank),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_gradientn(name = "Pareto frontier",
+                       colours = c("#FFC000", "grey90","#00B050"),
+                       limits = c(0, 1),                 
+                       breaks = c(0, 1), 
+                       na.value = "grey70",
+                       labels = c("Worst","Best"),
+                       guide = guide_colbar(
+                         show = c(TRUE, TRUE), 
+                         oob = "squish")
+  )+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+
+pp3 <- ggdraw() +
+  draw_plot(pp3, 0, 0, 1, 1) +                             
+  draw_plot(p3, 0.06, 0.02, 0.2, 0.5) +
+  draw_label(label = expression(Delta[NSCI] == -0.34),
+             x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
+             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression(BWR[NSCI] * ' = 3.05'),
+             x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+
+################################################################################
+#    Goal: prioritize basins with
+#      - high Shortfall   (large knowledge gaps)
+#      - high Governance  (strong capacity to fill those gaps)
+# ------------------------------------------------------------
+df4 <- data %>%
+  select(basin_id, biogeographic_realm,Governance, Shortfall) %>%
+  filter(!is.na(Governance), !is.na(Shortfall)) %>%
+  mutate(
+    # Convert both objectives to "minimization" form for nds_rank():
+    # We want to MAXIMIZE Shortfall → use -Shortfall
+    Shortfall_obj  = -Shortfall,
+    # We want to MAXIMIZE Governance → use -Governance
+    Governance_obj = -Governance
+  )
+
+df_plot_realm_4 <- add_realm_front(df4, c("Shortfall_obj", "Governance_obj")) %>%
+  tag_strategy(q = 0.10)
+
+p4 <- ggplot() +
+  geom_point(data = df_plot_realm_4,aes(x = Governance,y = Shortfall,colour = front_rank),size  = 0.1,alpha = 0.5) +
+  scale_colour_gradientn(name = "Pareto frontier",colours = c("#FFC000", "#BFBFBF", "#00B050"),
+                         limits = c(0, 1),breaks = c(0, 1), labels = c("Worst","Best"),
+                         guide = guide_colbar(show = c(TRUE, TRUE), oob = "squish"))+
+  #coord_fixed(xlim = c(0,1), ylim = c(0,1)) +
+  labs(x = "Protection", y = expression(Shortfall[NSCI])) +
+  theme_classic() +
+  scale_x_continuous(breaks  = c(0, 0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  theme(
+    axis.text  = element_text(colour = "black", size = 5),
+    axis.title = element_text(colour = "black", size = 6),
+    legend.title = element_text(size = 6, hjust = 0.5),
+    legend.text  = element_text(size = 5),
+    axis.line = element_line(linewidth = 0.2),
+    axis.ticks = element_line(linewidth = 0.2),
+    axis.ticks.length = unit(0.05, "cm"),
+    legend.key.width = unit(0.3,"cm"),
+    legend.key.height = unit(0.15,"cm"),
+    legend.background = element_blank(),
+    legend.position = "none",
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    plot.margin = margin(0,0,0,0)
+  )
+
+case4 <- inland %>% left_join(df_plot_realm_4[,c(2,8)], by = "basin_id")
+pp4 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300)+
+  ggrastr::rasterise(geom_sf(data =case4 ,aes(fill = front_rank),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_gradientn(name = "Pareto frontier",
+                       colours = c("#FFC000", "grey90","#00B050"),
+                       limits = c(0, 1),                 
+                       breaks = c(0, 1), 
+                       na.value = "grey70",
+                       labels = c("Worst","Best"),
+                       guide = guide_colbar(
+                         show = c(TRUE, TRUE), 
+                         oob = "squish")
+  )+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+
+pp4 <- ggdraw() +
+  draw_plot(pp4, 0, 0, 1, 1) +                             
+  draw_plot(p4, 0.06, 0.02, 0.2, 0.5)  +
+  draw_label(label = expression(Delta[NSCI] == -0.43),
+             x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
+             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression(BWR[NSCI] * ' = 8.59'),
+             x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+################################################################################
+# ------------------------------------------------------------
+#  Prepare data for 4-objective trade-off:
+#    Goal: High Shortfall × Low Investment × High Socioeconomics × High Governance
+#
+#    Assumptions:
+#    - Shortfall:       higher = larger knowledge gaps (priority ↑)
+#    - Investment:      higher = higher total cost (priority ↓)
+#    - Socioeconomics:  higher = stronger socioeconomic capacity
+#    - Governance:      higher = stronger institutional/governance capacity
+# ------------------------------------------------------------
+df5 <- data %>%
+  select(basin_id, biogeographic_realm, Investment, Socioeconomics, Governance, Shortfall) %>%
+  na.omit() %>%
+  mutate(
+    # Convert all objectives to "minimize" form for nds_rank():
+    # We want to MAXIMIZE Shortfall → minimize -Shortfall
+    Shortfall_obj      = -Shortfall,
+    # We want to MINIMIZE Investment → keep as is
+    Investment_obj     =  Investment,
+    # We want to MAXIMIZE Socioeconomics → minimize -Socioeconomics
+    Socioeconomics_obj = -Socioeconomics,
+    # We want to MAXIMIZE Governance → minimize -Governance
+    Governance_obj     = -Governance
+  )
+
+
+df_plot_realm_5 <- add_realm_front(df5, c("Shortfall_obj", "Investment_obj","Socioeconomics_obj","Governance_obj")) %>%
+  tag_strategy(q = 0.10)
+
+
+p5 <- ggparcoord(df_plot_realm_5,columns = c(7,8,9,10), groupColumn = 12,
+                 scale = "uniminmax", 
+                 showPoints = F,
+                 alphaLines = 0.1)+ 
+  scale_colour_gradientn(colours = c("#FFC000", "grey90","#00B050"))+
+  #geom_point(size = 1)+
+  geom_path(linewidth = 0.01,alpha = 0.5)+
+  #annotate(geom = "text",x = 3.6,y = 1.05,label = "BWR = 34", size = 2)+
+  theme_minimal()+
+  #coord_fixed(ratio = 3) +
+  scale_x_discrete(expand = c(0,0),labels = c("NSCI","Cost","Income","Protection"))+
+  #scale_x_discrete(expand = c(0,0),labels = c("S","C","I","P"))+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.x = element_line(color = "grey50", linewidth = 0.3),
+        legend.position = "none",
+        axis.text.y = element_text(colour = "black",size = 5),
+        axis.text.x = element_text(colour = "black",size = 5, angle = 45, vjust = 1.1, hjust = 0.8),
+        axis.line.x  = element_line(linewidth = 0.2),
+        axis.ticks = element_line(linewidth = 0.2),
+        axis.ticks.length = unit(0.05, "cm"),
+        plot.margin = margin(0,0,0,0)
+  )
+
+case5 <- inland %>% left_join(df_plot_realm_5[,c(2,12)], by = "basin_id")
+
+pp5 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300)+
+  ggrastr::rasterise(geom_sf(data =case5 ,aes(fill = front_rank),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_gradientn(name = "Pareto frontier",
+                       colours = c("#FFC000", "grey90","#00B050"),
+                       limits = c(0, 1),                 
+                       breaks = c(0, 1), 
+                       na.value = "grey70",
+                       labels = c("Worst","Best"),
+                       guide = guide_colbar(
+                         show = c(TRUE, TRUE), 
+                         oob = "squish")
+  )+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+pp5 <- ggdraw() +
+  draw_plot(pp5, 0, 0, 1, 1) +                             
+  draw_plot(p5, 0.01, 0.01, 0.2, 0.55)  +
+  draw_label(label = expression(Delta[NSCI] == -0.28),
+             x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
+             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression(BWR[NSCI] * ' = 2.18'),
+             x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+
+
+# ------------------------------------------------------------
+#  Prepare data for 6-objective trade-off:
+#    Goal: High Shortfall × Low Investment × High Socioeconomics × High Governance
+#
+#    Assumptions:
+#    - Shortfall:       higher = larger knowledge gaps (priority ↑)
+#    - Investment-adj:      higher = higher total cost (priority ↓)
+#    - Socioeconomics:  higher = stronger socioeconomic capacity
+#    - Governance:      higher = stronger institutional/governance capacity
+# ------------------------------------------------------------
+df6 <- data %>%
+  select(basin_id, biogeographic_realm, Investment, Socioeconomics, Governance, Shortfall) %>%
+  mutate(Investment_adj = Investment* (1-0.5*(1-Socioeconomics))) %>%
+  na.omit() %>%
+  mutate(
+    # Convert all objectives to "minimize" form for nds_rank():
+    # We want to MAXIMIZE Shortfall → minimize -Shortfall
+    Shortfall_obj      = -Shortfall,
+    # We want to MINIMIZE Investment → keep as is
+    Investment_obj     =  Investment_adj,
+    # We want to MAXIMIZE Governance → minimize -Governance
+    Governance_obj     = -Governance
+  )
+
+df_plot_realm_6 <- add_realm_front(df6, c("Shortfall_obj", "Investment_obj","Governance_obj")) %>%
+  tag_strategy(q = 0.10)
+
+
+p6 <- ggparcoord(df_plot_realm_6,columns = c(8,9,10), groupColumn = 12,
+                 scale = "uniminmax", 
+                 showPoints = F,
+                 alphaLines = 0.1)+ 
+  scale_colour_gradientn(colours = c("#FFC000", "grey90","#00B050"))+
+  #geom_point(size = 1)+
+  geom_path(linewidth = 0.01,alpha = 0.5)+
+  #annotate(geom = "text",x = 3.6,y = 1.05,label = "BWR = 34", size = 2)+
+  theme_minimal()+
+  #coord_fixed(ratio = 3) +
+  scale_x_discrete(expand = c(0,0),labels = c("NSCI",expression(Cost[adj]),"Protection"))+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.x = element_line(color = "grey50", linewidth = 0.3),
+        legend.position = "none",
+        axis.text.y = element_text(colour = "black",size = 5),
+        axis.text.x = element_text(colour = "black",size = 5, angle = 45, vjust = 1.1, hjust = 0.8),
+        axis.line.x  = element_line(linewidth = 0.2),
+        axis.ticks = element_line(linewidth = 0.2),
+        axis.ticks.length = unit(0.05, "cm"),
+        plot.margin = margin(0,0,0,0)
+  )
+
+case6 <- inland %>% left_join(df_plot_realm_6[,c(2,12)], by = "basin_id")
+pp6 <- ggplot()+
+  ggrastr::rasterise(geom_sf(data = world_map %>%
+                               st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
+                             fill = "#d3d3d3", colour = NA),dpi = 300)+
+  ggrastr::rasterise(geom_sf(data =case6 ,aes(fill = front_rank),colour = "white", linewidth = 0.03),dpi = 300)+
+  scale_fill_gradientn(name = "Pareto frontier",
+                       colours = c("#FFC000", "grey90","#00B050"),
+                       limits = c(0, 1),                 
+                       breaks = c(0, 1), 
+                       na.value = "grey70",
+                       labels = c("Worst","Best"),
+                       guide = guide_colbar(
+                         show = c(TRUE, TRUE), 
+                         oob = "squish")
+  )+
+  theme_void()+
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)+
+  theme(legend.position = "none",
+        plot.margin = margin(0,0,0,0))
+pp6 <- ggdraw() +
+  draw_plot(pp6, 0, 0, 1, 1) +                             
+  draw_plot(p6, 0.01, 0.01, 0.2, 0.55)  +
+  draw_label(label = expression(Delta[NSCI] == -0.25),
+             x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
+             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression(BWR[NSCI] * ' = 3.80'),
+             x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+
 row_pair <- function(left_plot, right_plot, labels) {
   cowplot::plot_grid(
     left_plot  + theme(plot.margin = margin(5, 5, 0, 0, unit = "pt")),
     right_plot + theme(plot.margin = margin(5, 0, 0, 0, unit = "pt")),
     ncol = 2,
-    rel_widths = c(0.4, 0.6),
+    rel_widths = c(0.5, 0.5),
     labels = labels,
     label_size = 9,
     label_fontface = "bold",
@@ -631,12 +747,11 @@ row_pair <- function(left_plot, right_plot, labels) {
   )
 }
 
-row1 <- row_pair(p1, pp1, labels = c("A", "B"))
-row2 <- row_pair(p2, pp2, labels = c("C", "D"))
-row3 <- row_pair(p3, pp3, labels = c("E", "F"))
-row4 <- row_pair(p4, pp4, labels = c("G", "H"))
+row1 <- row_pair(pp1, pp2, labels = c("A","B"))
+row2 <- row_pair(pp3, pp4, labels = c("C","D"))
+row3 <- row_pair(pp5, pp6, labels = c("E","F"))
 
-fig <- row1 / row2 / row3 / row4
+fig <- row1 / row2 / row3
 fig
 
 # Save with here()
@@ -646,5 +761,124 @@ ggsave(
   dpi = 300,
   units = "cm",
   width = 18,
-  height = 20
+  height = 15
 )
+
+
+################################################################################
+get_denominator_vector <- function(df_subset, scenario) {
+  valid_scenarios <- c("scenario_2", "scenario_3", "scenario_4", "scenario_5","scenario_6")
+  if (!scenario %in% valid_scenarios) {
+    stop(paste("Unsupported scenario:", scenario, "| Valid scenarios:", paste(valid_scenarios, collapse = ", ")))
+  }
+  if (scenario == "scenario_2") {
+    return(df_subset$Investment)
+  } else if (scenario == "scenario_3") {
+    return(df_subset$Socioeconomics)
+  } else if (scenario == "scenario_4") {
+    return(df_subset$Governance)
+  }else if (scenario == "scenario_5") {
+    return(df_subset$Investment * df_subset$Socioeconomics * df_subset$Governance)
+  } else if (scenario == "scenario_6") {
+    return(df_subset$Investment * df_subset$Governance)
+  }
+}
+calculate_BWR_with_CI <- function(df, scenario) {
+  best  <- df %>% filter(strategy == "best")
+  worst <- df %>% filter(strategy == "worst")
+  if (nrow(best) == 0 | nrow(worst) == 0) {
+    result <- tibble(
+      scenario = scenario,         
+      n_best = 0, 
+      n_worst = 0,
+      BWR = NA_real_,               
+      BWR_CI_95_lower = NA_real_,
+      BWR_CI_95_upper = NA_real_
+    )
+    cat(sprintf("Scenario %s: No valid best/worst group (n_best=%d, n_worst=%d)\n", 
+                scenario, result$n_best, result$n_worst))
+    return(result)
+  }
+  
+  eps <- 1e-6
+  denom_best <- get_denominator_vector(best, scenario)
+  E_best_raw <- best$Shortfall / denom_best
+  E_best     <- E_best_raw[is.finite(E_best_raw) & !is.na(E_best_raw) & denom_best > eps]
+  denom_worst <- get_denominator_vector(worst, scenario)
+  E_worst_raw <- worst$Shortfall / denom_worst
+  E_worst     <- E_worst_raw[is.finite(E_worst_raw) & !is.na(E_worst_raw) & denom_worst > eps]
+  if (length(E_best) == 0 | length(E_worst) == 0) {
+    result <- tibble(
+      scenario = scenario,
+      n_best = length(E_best),
+      n_worst = length(E_worst),
+      BWR = NA_real_,
+      BWR_CI_95_lower = NA_real_,
+      BWR_CI_95_upper = NA_real_
+    )
+    cat(sprintf("Scenario %s: No valid E_best/E_worst (n_best=%d, n_worst=%d)\n", 
+                scenario, result$n_best, result$n_worst))
+    return(result)
+  }
+  mean_best  <- mean(E_best, na.rm = TRUE)
+  mean_worst <- mean(E_worst, na.rm = TRUE)
+  BWR        <- mean_best / mean_worst
+  
+  se_best  <- sd(E_best, na.rm = TRUE) / sqrt(length(E_best))
+  se_worst <- sd(E_worst, na.rm = TRUE) / sqrt(length(E_worst))
+  if (mean_best == 0 | mean_worst == 0) {
+    result <- tibble(
+      scenario = scenario,
+      n_best = length(E_best),
+      n_worst = length(E_worst),
+      BWR = 0,
+      BWR_CI_95_lower = 0,
+      BWR_CI_95_upper = 0
+    )
+    cat(sprintf("Scenario %s: BWR=0 (mean_best=%.4f, mean_worst=%.4f)\n", 
+                scenario, mean_best, mean_worst))
+    return(result)
+  }
+  se_log_BWR <- sqrt((se_best / mean_best)^2 + (se_worst / mean_worst)^2)
+  df_total   <- length(E_best) + length(E_worst) - 2
+  t_crit     <- if (df_total > 0) qt(0.975, df = df_total) else 1.96 
+  
+  log_BWR     <- log(BWR)
+  CI_lower    <- exp(log_BWR - t_crit * se_log_BWR)
+  CI_upper    <- exp(log_BWR + t_crit * se_log_BWR)
+  result <- tibble(
+    scenario = scenario,
+    n_best = length(E_best),          
+    n_worst = length(E_worst),
+    BWR = round(BWR, 3),              
+    BWR_CI_95_lower = round(CI_lower, 4),  
+    BWR_CI_95_upper = round(CI_upper, 3)   
+  )
+  cat(sprintf(
+    "BWR = %.3f (95%% CI: %.3f–%.3f), n_best = %d, n_worst = %d\n",
+    result$BWR, result$BWR_CI_95_lower, result$BWR_CI_95_upper,
+    result$n_best, result$n_worst
+  ))
+  return(result)
+}
+
+# ---------------------- scenario_2 ---------------------- #
+calculate_BWR_with_CI(df_plot_realm_2 %>% mutate(scenario = "scenario_2") , scenario = "scenario_2")
+# BWR = 5.252 (95% CI: 4.244–6.499), n_best = 225, n_worst = 176
+
+# ---------------------- scenario_3 ---------------------- #
+calculate_BWR_with_CI(df_plot_realm_3 %>% mutate(scenario = "scenario_3") , scenario = "scenario_3")
+# BWR = 3.052 (95% CI: 1.609–5.790), n_best = 203, n_worst = 346
+
+# ---------------------- scenario_4 ---------------------- #
+calculate_BWR_with_CI(df_plot_realm_4 %>% mutate(scenario = "scenario_4") , scenario = "scenario_4")
+# BWR = 8.587 (95% CI: 5.835–12.635), n_best = 183, n_worst = 426
+
+# ---------------------- scenario_5 ---------------------- #
+calculate_BWR_with_CI(df_plot_realm_5 %>% mutate(scenario = "scenario_5") , scenario = "scenario_5")
+# BWR = 2.180 (95% CI: 1.500–3.171), n_best = 322, n_worst = 174
+
+# ---------------------- scenario_6 ---------------------- #
+calculate_BWR_with_CI(df_plot_realm_6 %>% mutate(scenario = "scenario_6") , scenario = "scenario_6")
+# BWR = 3.804 (95% CI: 2.866–5.050), n_best = 225, n_worst = 189
+

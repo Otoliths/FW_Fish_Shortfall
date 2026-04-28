@@ -1,5 +1,6 @@
 # ------------------------------------------------------------------------------
-# Supplementary Figure S11 National-scale patterns of biogeographical ignorance in freshwater fish biodiversity
+# Supplementary Figure S11 
+# National-scale patterns of biogeographical ignorance in freshwater fish biodiversity
 # ------------------------------------------------------------------------------
 library(dplyr)
 #library(ggpubr)
@@ -133,12 +134,7 @@ df_q30 <- df_q30 %>%
   )
 
 
-table(df_q30$scenario, useNA = "ifany")
-# LS↑ WS↑ DS↑ LS↑ WS↓ DS↓ LS↓ WS↑ DS↑ LS↓ WS↑ DS↓        
-#   32           2           4           1        
-
-
-#write.csv(df_q30,"output/tables/country_shortfalls_fix.csv",row.names = F)
+#write.csv(df_q30,"output/tables/country_shortfalls.csv",row.names = F)
 country_shortfalls <- read.csv("output/tables/country_shortfalls.csv" )
 
 #world_map <- ne_countries(scale = 50, type = "countries", returnclass = "sf")
@@ -180,12 +176,12 @@ overlap_tab
 # Groups:   is_hotspot [2]
 # is_hotspot scenario    n_country   prop
 # <lgl>      <chr>           <int>  <dbl>
-# 1 FALSE      LS↑ WS↑ DS↑         3 0.333 
-# 2 FALSE      LS↑ WS↓ DS↓         2 0.222 
-# 3 FALSE      LS↓ WS↑ DS↑         3 0.333 
-# 4 FALSE      LS↓ WS↑ DS↓         1 0.111 
-# 5 TRUE       LS↑ WS↑ DS↑        29 0.967 
-# 6 TRUE       LS↓ WS↑ DS↑         1 0.0333
+# 1 FALSE      LS↑ WS↑ DS↑         4 0.667 
+# 2 FALSE      LS↓ WS↑ DS↑         2 0.333 
+# 3 TRUE       LS↑ WS↑ DS↑        26 0.897 
+# 4 TRUE       LS↑ WS↑ DS↓         1 0.0345
+# 5 TRUE       LS↑ WS↓ DS↓         1 0.0345
+# 6 TRUE       LS↓ WS↑ DS↑         1 0.0345
 
 
 #overlap_tab <- rbind(overlap_tab,remain)
@@ -273,6 +269,18 @@ count_scenario_1 <- pts %>%
   summarise(n_cells = n(),.groups = "drop") %>%
   mutate(scenario = 'LS* "" %up% "" *WS* "" %up% "" *DS* "" %up% ""')
 
+count_scenario_2 <- pts %>%
+  select(is_hotspot,scenario) %>%
+  mutate(scenario = ifelse(scenario == "LS↑ WS↑ DS↓","LS↑ WS↑ DS↓",NA),
+         is_shortfall = ifelse(is.na(scenario),FALSE,TRUE)) %>%
+  mutate(is_shortfall = factor(is_shortfall),
+         is_hotspot = factor(is_hotspot)) %>%
+  bi_class(x=is_shortfall,y= is_hotspot,dim = 2) %>%
+  group_by(scenario,bi_class) %>%
+  summarise(n_cells = n(),.groups = "drop") %>%
+  rbind(data.frame(scenario = NA,bi_class = "2-1",n_cells = 0)) %>%
+  mutate(scenario = 'LS* "" %up% "" *WS* "" %up% "" *DS* "" %down% ""')
+
 count_scenario_4 <- pts %>%
   select(is_hotspot,scenario) %>%
   mutate(scenario = ifelse(scenario == "LS↑ WS↓ DS↓","LS↑ WS↓ DS↓",NA),
@@ -282,7 +290,7 @@ count_scenario_4 <- pts %>%
   bi_class(x=is_shortfall,y= is_hotspot,dim = 2) %>%
   group_by(scenario,bi_class) %>%
   summarise(n_cells = n(),.groups = "drop") %>%
-  rbind(data.frame(scenario = NA,bi_class = "2-2",n_cells = 0)) %>%
+  rbind(data.frame(scenario = NA,bi_class = "2-1",n_cells = 0)) %>%
   mutate(scenario = 'LS* "" %up% "" *WS* "" %down% "" *DS* "" %down% ""')   
 
 count_scenario_5 <- pts %>%
@@ -296,21 +304,10 @@ count_scenario_5 <- pts %>%
   summarise(n_cells = n(),.groups = "drop")  %>%
   mutate(scenario = 'LS* "" %down% "" *WS* "" %up% "" *DS* "" %up% ""')    
 
-count_scenario_6 <- pts %>%
-  select(is_hotspot,scenario) %>%
-  mutate(scenario = ifelse(scenario == "LS↓ WS↑ DS↓","LS↓ WS↑ DS↓",NA),
-         is_shortfall = ifelse(is.na(scenario),FALSE,TRUE)) %>%
-  mutate(is_shortfall = factor(is_shortfall),
-         is_hotspot = factor(is_hotspot)) %>%
-  bi_class(x=is_shortfall,y= is_hotspot,dim = 2) %>%
-  group_by(scenario,bi_class) %>%
-  summarise(n_cells = n(),.groups = "drop") %>%
-  rbind(data.frame(scenario = NA,bi_class = "2-2",n_cells = 0)) %>%
-  mutate(scenario = 'LS* "" %down% "" *WS* "" %up% "" *DS* "" %down% ""')     
 
 
-count_scenario <- rbind(count_scenario_1,count_scenario_4,count_scenario_5,count_scenario_6)
-rm(count_scenario_1,count_scenario_4,count_scenario_5,count_scenario_6)
+count_scenario <- rbind(count_scenario_1,count_scenario_2,count_scenario_4,count_scenario_5)
+rm(count_scenario_1,count_scenario_2,count_scenario_4,count_scenario_5)
 
 count_scenario <- count_scenario %>%
   left_join(grid_dat,by = "bi_class")
@@ -318,12 +315,10 @@ count_scenario <- count_scenario %>%
 
 count_scenario$scenario <- factor(count_scenario$scenario,
                                   levels = c('LS* "" %up% "" *WS* "" %up% "" *DS* "" %up% ""',
+                                             'LS* "" %up% "" *WS* "" %up% "" *DS* "" %down% ""',
                                              'LS* "" %up% "" *WS* "" %down% "" *DS* "" %down% ""',
-                                             'LS* "" %down% "" *WS* "" %up% "" *DS* "" %up% ""',
-                                             'LS* "" %down% "" *WS* "" %up% "" *DS* "" %down% ""'
+                                             'LS* "" %down% "" *WS* "" %up% "" *DS* "" %up% ""'
                                   ))
-
-
 
 
 p1 <- ggplot(data = count_scenario) +
@@ -396,7 +391,7 @@ df_nsc <- df_nsc %>%
   )
 
 
-saveRDS(df_nsc,"input/processed/country_shortfall_fix.rds")
+saveRDS(df_nsc,"input/processed/country_shortfall.rds")
 # classification by percentiles
 # q_high <- quantile(df_nsc$NSCI_rank_norm, 0.75, na.rm = TRUE)
 # q_low  <- quantile(df_nsc$NSCI_rank_norm, 0.25, na.rm = TRUE)
@@ -427,7 +422,7 @@ p3 <- ggplot(data = dt) +
     breaks = seq(0, 1, 0.5),
     labels = scales::number_format(accuracy = 0.1),
     guide = legendry::compose_sandwich(
-      middle = legendry::gizmo_density(just = 0.5),
+      middle = gizmo_histogram(just = 1),
       text   = "axis_base"
     )
   )+

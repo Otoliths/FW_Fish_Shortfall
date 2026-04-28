@@ -12,6 +12,7 @@ library(classInt)
 library(cowplot)
 library(here)
 library(ggrastr)
+set.seed(123)
 
 # ---- I/O ----
 linnaean_sf <- read.csv(here("output", "tables", "basin_linnaean_shortfall.csv"))
@@ -41,9 +42,9 @@ spearman_label <- function(x, y) {
   rho_txt <- sprintf("%.2f", rho)
 
   if (p < 0.001) {
-    sprintf('r * "=" * %s * "," * italic(p) * "<" * 0.001', rho_txt)
+    sprintf('r * "=" * %s * ", " * italic(p) * "<" * 0.001', rho_txt)
   } else {
-    sprintf('r * "=" * %s * "," * italic(p) * "=" * %s', rho_txt, signif(p, 2))
+    sprintf('r * "=" * %s * ", " * italic(p) * "=" * %s', rho_txt, signif(p, 2))
   }
 }
 

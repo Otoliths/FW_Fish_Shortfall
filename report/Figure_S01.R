@@ -15,7 +15,7 @@ library(biscale)
 library(classInt)
 library(stringr)
 library(ggtext)
-
+set.seed(123)
 
 linnaean <- read.csv("output/tables/country_linnaean_shortfall.csv")
 wallacean <- read.csv("output/tables/country_wallacean_shortfall.csv")

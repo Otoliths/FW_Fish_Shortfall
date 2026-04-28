@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------------------
 # Supplementary Figure S4
-# Counts of significant predictor effects across biogeographic realms
+# Counts of significant predictor effects across biogeographic realms and continents
 
 library(brms)
 library(dplyr)
@@ -10,141 +10,166 @@ library(ggplot2)
 options(warn = -1)
 
 
-compute_realm_slopes <- function(v, draws, cont_levels, baseline_realm = "Afrotropic") {
-  # Name of the main-effect coefficient for predictor v
-  base_name <- paste0("b_", v)
+# ---- helper: validate family and transform beta to HR ----
+.beta_to_hr <- function(beta,
+                        draws,
+                        family = c("weibull", "gompertz"),
+                        shape_col = "shape") {
+  family <- match.arg(family)
   
-  if (!base_name %in% names(draws)) {
-    stop("No coefficient found for ", base_name)
+  if (family == "gompertz") {
+    log_hr <- beta
+  } else if (family == "weibull") {
+    if (!shape_col %in% names(draws)) {
+      stop("No Weibull shape column found: ", shape_col)
+    }
+    shape  <- draws[[shape_col]]
+    log_hr <- -shape * beta
   }
   
-  # Baseline slope β_v (effect in the reference realm)
-  base <- draws[[base_name]]
-  
-  # Keep .draw (and optionally .chain, .iteration) to preserve posterior structure
-  meta_cols <- draws %>% dplyr::select(.chain, .iteration, .draw)
-  
-  # For each realm, construct the posterior slope
-  out <- map_dfr(cont_levels, function(ct) {
-    if (ct == baseline_realm) {
-      # Baseline realm: slope = β_v
-      slope <- base
-    } else {
-      # Non-baseline realms: slope = β_v + β_v:realm=ct
-      inter_name <- paste0("b_", v, ":biogeographic_realm", ct)
-      if (inter_name %in% names(draws)) {
-        slope <- base + draws[[inter_name]]
-      } else {
-        # Safety fallback: no interaction term found (should not occur given your formula)
-        slope <- base
-      }
-    }
-    
-    tibble(
-      realm = ct,
-      slope     = slope
-    )
-  })
-  
-  # Bind back posterior meta info and add variable name
-  bind_cols(
-    meta_cols[rep(1:nrow(meta_cols), times = length(cont_levels)), ],
-    out
-  ) %>%
-    mutate(variable = v)
+  list(
+    log_hr = log_hr,
+    hr     = exp(log_hr)
+  )
 }
 
-
-compute_continent_slopes <- function(v, draws, cont_levels, baseline_continent = "Africa") {
-  # Name of the main-effect coefficient for predictor v
+# ---- helper: construct realm-specific beta ----
+.compute_realm_beta <- function(v,
+                                draws,
+                                cont_levels,
+                                baseline_realm = "Afrotropic",
+                                realm_var = "biogeographic_realm") {
   base_name <- paste0("b_", v)
   
   if (!base_name %in% names(draws)) {
     stop("No coefficient found for ", base_name)
   }
   
-  # Baseline slope β_v (effect in the reference continent)
   base <- draws[[base_name]]
   
-  # Keep .draw (and optionally .chain, .iteration) to preserve posterior structure
-  meta_cols <- draws %>% dplyr::select(.chain, .iteration, .draw)
-  
-  # For each continent, construct the posterior slope
-  out <- map_dfr(cont_levels, function(ct) {
-    if (ct == baseline_continent) {
-      # Baseline continent: slope = β_v
-      slope <- base
+  purrr::map_dfr(cont_levels, function(ct) {
+    if (ct == baseline_realm) {
+      beta <- base
     } else {
-      # Non-baseline continents: slope = β_v + β_v:continent=ct
-      inter_name <- paste0("b_", v, ":continent", ct)
+      inter_name <- paste0("b_", v, ":", realm_var, ct)
+      
+      # fallback: try reversed interaction naming if needed
+      inter_name_alt <- paste0("b_", realm_var, ct, ":", v)
+      
       if (inter_name %in% names(draws)) {
-        slope <- base + draws[[inter_name]]
+        beta <- base + draws[[inter_name]]
+      } else if (inter_name_alt %in% names(draws)) {
+        beta <- base + draws[[inter_name_alt]]
       } else {
-        # Safety fallback: no interaction term found (should not occur given your formula)
-        slope <- base
+        beta <- base
       }
     }
     
-    tibble(
-      continent = ct,
-      slope     = slope
+    tibble::tibble(
+      realm = ct,
+      beta  = beta
     )
   })
+}
+
+# ---- realm-specific HR ----
+compute_realm_hr <- function(v,
+                             draws,
+                             cont_levels,
+                             baseline_realm = "Afrotropic",
+                             family = c("weibull", "gompertz"),
+                             shape_col = "shape",
+                             realm_var = "biogeographic_realm") {
+  family <- match.arg(family)
   
-  # Bind back posterior meta info and add variable name
-  bind_cols(
-    meta_cols[rep(1:nrow(meta_cols), times = length(cont_levels)), ],
+  req_meta <- c(".chain", ".iteration", ".draw")
+  has_meta <- req_meta[req_meta %in% names(draws)]
+  
+  if (length(has_meta) == 0) {
+    stop("draws must contain at least one posterior meta column such as .draw")
+  }
+  
+  meta_cols <- draws %>% dplyr::select(dplyr::all_of(has_meta))
+  
+  realm_beta <- .compute_realm_beta(
+    v = v,
+    draws = draws,
+    cont_levels = cont_levels,
+    baseline_realm = baseline_realm,
+    realm_var = realm_var
+  )
+  
+  trans <- .beta_to_hr(
+    beta = realm_beta$beta,
+    draws = draws[rep(seq_len(nrow(draws)), times = length(cont_levels)), , drop = FALSE],
+    family = family,
+    shape_col = shape_col
+  )
+  
+  out <- realm_beta %>%
+    dplyr::mutate(
+      log_hr = trans$log_hr,
+      hr     = trans$hr
+    )
+  
+  dplyr::bind_cols(
+    meta_cols[rep(seq_len(nrow(meta_cols)), times = length(cont_levels)), , drop = FALSE],
     out
   ) %>%
-    mutate(variable = v)
+    dplyr::mutate(
+      variable = v,
+      family   = family
+    ) %>%
+    dplyr::relocate(variable, family, realm, .after = dplyr::last_col())
 }
 
 ################################################################################
-basin_linnaean <- readRDS("output/model/basin_linnaean_all.rds")$lognormal
-draws_basin_linnaean <- as_draws_df(basin_linnaean)
-dat_basin_linnaean <- basin_linnaean$data
-levels(dat_basin_linnaean$biogeographic_realm)
-cont_levels <- levels(dat_basin_linnaean$biogeographic_realm)
-vars_basin_linnaean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+fit <- readRDS("output/model/basin_linnaean_weibull_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
+vars_linnaean <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sampling_effort","sequencing_effort", "range_rarity", "population_density"
 )
 
-
-slopes_draws_basin_linnaean <- map_dfr(
-  vars_basin_linnaean,
-  ~ compute_realm_slopes(
+effect_counts_basin_linnaean <- map_dfr(
+  vars_linnaean,
+  ~ compute_realm_hr(
     v             = .x,
-    draws         = draws_basin_linnaean,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_realm = "Afrotropic"  # 
+    baseline_realm = "Afrotropic",
+    family = "weibull"
   )
-)
-
-table_basin_linnaean <- slopes_draws_basin_linnaean %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_linnaean)
+  ) %>%
   group_by(variable, realm) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, realm)
-
-
-sig_basin_linnaean <- table_basin_linnaean %>%
+  arrange(variable, realm) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_basin_linnaean <- sig_basin_linnaean %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -155,55 +180,56 @@ effect_counts_basin_linnaean <- sig_basin_linnaean %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Linnaean"
   )
-rm(basin_linnaean,dat_basin_linnaean,draws_basin_linnaean,
-   sig_basin_linnaean,slopes_draws_basin_linnaean,table_basin_linnaean)
+
+rm(fit,w,vars_linnaean,cont_levels,draws,dat,n_realm)
 
 ################################################################################
-basin_wallacean <- readRDS("output/model/basin_wallacean_all.rds")$lognormal
-draws_basin_wallacean <- as_draws_df(basin_wallacean)
-dat_basin_wallacean <- basin_wallacean$data
-levels(dat_basin_wallacean$biogeographic_realm)
-cont_levels <- levels(dat_basin_wallacean$biogeographic_realm)
-vars_basin_wallacean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+fit <- readRDS("output/model/basin_wallacean_gompertz_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
+vars_wallacean <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sequencing_effort", "range_rarity", "population_density"
 )
 
-
-slopes_draws_basin_wallacean <- map_dfr(
-  vars_basin_wallacean,
-  ~ compute_realm_slopes(
+effect_counts_basin_wallacean <- map_dfr(
+  vars_wallacean,
+  ~ compute_realm_hr(
     v             = .x,
-    draws         = draws_basin_wallacean,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_realm = "Afrotropic"  # 
+    baseline_realm = "Afrotropic",
+    family = "gompertz"
   )
-)
-
-table_basin_wallacean <- slopes_draws_basin_wallacean %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_wallacean)
+  ) %>%
   group_by(variable, realm) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, realm)
-
-
-sig_basin_wallacean <- table_basin_wallacean %>%
+  arrange(variable, realm) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_basin_wallacean <- sig_basin_wallacean %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -214,55 +240,56 @@ effect_counts_basin_wallacean <- sig_basin_wallacean %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Wallacean"
   )
-rm(basin_wallacean,dat_basin_wallacean,draws_basin_wallacean,
-   sig_basin_wallacean,slopes_draws_basin_wallacean,table_basin_wallacean)
+
+rm(fit,w,vars_wallacean,cont_levels,draws,dat,n_realm)
 
 ################################################################################
-basin_darwinian <- readRDS("output/model/basin_darwinian_all.rds")$gamma
-draws_basin_darwinian <- as_draws_df(basin_darwinian)
-dat_basin_darwinian <- basin_darwinian$data
-levels(dat_basin_darwinian$biogeographic_realm)
-cont_levels <- levels(dat_basin_darwinian$biogeographic_realm)
-vars_basin_darwinian <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+fit <- readRDS("output/model/basin_darwinian_gompertz_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
+vars_darwinian <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
-  "preserved_specimen", "sampling_effort", "range_rarity", "population_density"
+  "preserved_specimen", "sampling_effort","range_rarity", "population_density"
 )
 
-
-slopes_draws_basin_darwinian <- map_dfr(
-  vars_basin_darwinian,
-  ~ compute_realm_slopes(
+effect_counts_basin_darwinian <- map_dfr(
+  vars_darwinian,
+  ~ compute_realm_hr(
     v             = .x,
-    draws         = draws_basin_darwinian,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_realm = "Afrotropic"  # 
+    baseline_realm = "Afrotropic",
+    family = "gompertz"
   )
-)
-
-table_basin_darwinian <- slopes_draws_basin_darwinian %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_darwinian)
+  ) %>%
   group_by(variable, realm) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, realm)
-
-
-sig_basin_darwinian <- table_basin_darwinian %>%
+  arrange(variable, realm) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_basin_darwinian <- sig_basin_darwinian %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -273,9 +300,8 @@ effect_counts_basin_darwinian <- sig_basin_darwinian %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Darwinian"
   )
-rm(basin_darwinian,dat_basin_darwinian,draws_basin_darwinian,
-   sig_basin_darwinian,slopes_draws_basin_darwinian,table_basin_darwinian)
 
+rm(fit,w,vars_darwinian,cont_levels,draws,dat,n_realm)
 #################################################################################
 effect_counts_basin <- rbind(effect_counts_basin_linnaean,
                              effect_counts_basin_wallacean,
@@ -292,7 +318,7 @@ rename_map_basin <- c(
   watertemp            = "Water temperature",
   elevation            = "Elevation",
   population_density   = "Human density",
-  taxonmic_effort      = "Taxonomic effort",
+  taxonomic_effort     = "Taxonomic effort",
   taxonomic_activity   = "Taxonomic activity",
   sampling_effort      = "Sampling effort",
   sequencing_effort    = "Sequencing effort"
@@ -330,15 +356,15 @@ p1 <- ggplot(effect_counts_plot_1,
   scale_fill_manual(
     values = nc_colors,
     breaks = c("positive", "negative"),
-    labels = c("Positive", "Negative"),
+    labels = c("HR>1", "HR<1"),
     name   = "Direction"
   ) +
   labs(
     x = NULL,
     y = expression("Number of biogeographic realm with significant effects (" * italic(p) * " < 0.05)")
   ) +
-  annotate("text", x = 0.8, y = 6, label = "+",colour = "#4C78A8", face = "bold",size = 5)+
-  annotate("text", x = 0.8, y = -6, label = "-",colour = "#F58518", face = "bold",size = 5)+
+  # annotate("text", x = 0.8, y = 6, label = "HR>1",colour = "#4C78A8", face = "bold",size = 3)+
+  # annotate("text", x = 0.8, y = -6, label = "HR<1",colour = "#F58518", face = "bold",size = 3)+
   facet_wrap(. ~ shortfall, labeller = labeller(shortfall = custom_labels)) +
   theme_bw() +
   theme(
@@ -352,52 +378,168 @@ p1 <- ggplot(effect_counts_plot_1,
   )
 
 
+
 ################################################################################
-country_linnaean <- readRDS("output/model/country_linnaean_all.rds")$weibull
-draws_country_linnaean <- as_draws_df(country_linnaean)
-dat_country_linnaean <- country_linnaean$data
-levels(dat_country_linnaean$continent)
-cont_levels <- levels(dat_country_linnaean$continent)
-vars_country_linnaean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+# ---- helper: validate family and transform beta to HR ----
+.beta_to_hr <- function(beta,
+                        draws,
+                        family = c("weibull", "gompertz"),
+                        shape_col = "shape") {
+  family <- match.arg(family)
+  
+  if (family == "gompertz") {
+    log_hr <- beta
+  } else if (family == "weibull") {
+    if (!shape_col %in% names(draws)) {
+      stop("No Weibull shape column found: ", shape_col)
+    }
+    shape  <- draws[[shape_col]]
+    log_hr <- -shape * beta
+  }
+  
+  list(
+    log_hr = log_hr,
+    hr     = exp(log_hr)
+  )
+}
+
+# ---- helper: construct continent-specific beta ----
+.compute_continent_beta <- function(v,
+                                    draws,
+                                    cont_levels,
+                                    baseline_continent = "Africa",
+                                    continent_var = "continent") {
+  base_name <- paste0("b_", v)
+  
+  if (!base_name %in% names(draws)) {
+    stop("No coefficient found for ", base_name)
+  }
+  
+  base <- draws[[base_name]]
+  
+  purrr::map_dfr(cont_levels, function(ct) {
+    if (ct == baseline_continent) {
+      beta <- base
+    } else {
+      inter_name <- paste0("b_", v, ":", continent_var, ct)
+      
+      # fallback: try reversed interaction naming if needed
+      inter_name_alt <- paste0("b_", continent_var, ct, ":", v)
+      
+      if (inter_name %in% names(draws)) {
+        beta <- base + draws[[inter_name]]
+      } else if (inter_name_alt %in% names(draws)) {
+        beta <- base + draws[[inter_name_alt]]
+      } else {
+        beta <- base
+      }
+    }
+    
+    tibble::tibble(
+      continent = ct,
+      beta  = beta
+    )
+  })
+}
+
+# ---- continent-specific HR ----
+compute_continent_hr <- function(v,
+                                 draws,
+                                 cont_levels,
+                                 baseline_continent = "Africa",
+                                 family = c("weibull", "gompertz"),
+                                 shape_col = "shape",
+                                 continent_var = "continent") {
+  family <- match.arg(family)
+  
+  req_meta <- c(".chain", ".iteration", ".draw")
+  has_meta <- req_meta[req_meta %in% names(draws)]
+  
+  if (length(has_meta) == 0) {
+    stop("draws must contain at least one posterior meta column such as .draw")
+  }
+  
+  meta_cols <- draws %>% dplyr::select(dplyr::all_of(has_meta))
+  
+  continent_beta <- .compute_continent_beta(
+    v = v,
+    draws = draws,
+    cont_levels = cont_levels,
+    baseline_continent = baseline_continent,
+    continent_var = continent_var
+  )
+  
+  trans <- .beta_to_hr(
+    beta = continent_beta$beta,
+    draws = draws[rep(seq_len(nrow(draws)), times = length(cont_levels)), , drop = FALSE],
+    family = family,
+    shape_col = shape_col
+  )
+  
+  out <- continent_beta %>%
+    dplyr::mutate(
+      log_hr = trans$log_hr,
+      hr     = trans$hr
+    )
+  
+  dplyr::bind_cols(
+    meta_cols[rep(seq_len(nrow(meta_cols)), times = length(cont_levels)), , drop = FALSE],
+    out
+  ) %>%
+    dplyr::mutate(
+      variable = v,
+      family   = family
+    ) %>%
+    dplyr::relocate(variable, family, continent, .after = dplyr::last_col())
+}
+
+################################################################################
+fit <- readRDS("output/model/country_linnaean_gompertz_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$continent)
+w <- prop.table(table(dat$continent))
+cont_levels <- names(w)
+n_continent <- as.data.frame(table(dat$continent))
+names(n_continent) <- c("continent","n")
+
+vars_linnaean <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sampling_effort","sequencing_effort", "range_rarity", "population_density"
 )
 
-
-slopes_draws_country_linnaean <- map_dfr(
-  vars_country_linnaean,
-  ~ compute_continent_slopes(
+effect_counts_country_linnaean <- map_dfr(
+  vars_linnaean,
+  ~ compute_continent_hr(
     v             = .x,
-    draws         = draws_country_linnaean,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"  # 如果 baseline 不是 Africa，可以改这里
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
-)
-
-table_country_linnaean <- slopes_draws_country_linnaean %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    continent = factor(continent, levels = cont_levels),
+    variable  = factor(variable, levels = vars_linnaean)
+  ) %>%
   group_by(variable, continent) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, continent)
-
-
-sig_country_linnaean <- table_country_linnaean %>%
+  arrange(variable, continent) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_country_linnaean <- sig_country_linnaean %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -408,53 +550,55 @@ effect_counts_country_linnaean <- sig_country_linnaean %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Linnaean"
   )
-rm(country_linnaean,dat_country_linnaean,draws_country_linnaean,
-   sig_country_linnaean,slopes_draws_country_linnaean,table_country_linnaean)
+
+rm(fit,w,vars_linnaean,cont_levels,draws,dat,n_continent)
 ################################################################################
-country_wallacean <- readRDS("output/model/country_wallacean_all.rds")$lognormal
-draws_country_wallacean <- as_draws_df(country_wallacean)
-dat_country_wallacean <- country_wallacean$data
-levels(dat_country_wallacean$continent)
-cont_levels <- levels(dat_country_wallacean$continent)
-vars_country_wallacean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+fit <- readRDS("output/model/country_wallacean_gompertz_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$continent)
+w <- prop.table(table(dat$continent))
+cont_levels <- names(w)
+n_continent <- as.data.frame(table(dat$continent))
+names(n_continent) <- c("continent","n")
+
+vars_wallacean <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sequencing_effort", "range_rarity", "population_density"
 )
 
-
-slopes_draws_country_wallacean <- map_dfr(
-  vars_country_wallacean,
-  ~ compute_continent_slopes(
+effect_counts_country_wallacean <- map_dfr(
+  vars_wallacean,
+  ~ compute_continent_hr(
     v             = .x,
-    draws         = draws_country_wallacean,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"  
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
-)
-
-table_country_wallacean <- slopes_draws_country_wallacean %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    continent = factor(continent, levels = cont_levels),
+    variable  = factor(variable, levels = vars_wallacean)
+  ) %>%
   group_by(variable, continent) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, continent)
-
-sig_country_wallacean <- table_country_wallacean %>%
+  arrange(variable, continent) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_country_wallacean <- sig_country_wallacean %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -465,55 +609,55 @@ effect_counts_country_wallacean <- sig_country_wallacean %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Wallacean"
   )
-rm(country_wallacean,dat_country_wallacean,draws_country_wallacean,
-   sig_country_wallacean,slopes_draws_country_wallacean,table_country_wallacean)
+rm(fit,w,vars_wallacean,cont_levels,draws,dat,n_continent)
 
 ################################################################################
-country_darwinian <- readRDS("output/model/country_darwinian_all.rds")$weibull
-draws_country_darwinian <- as_draws_df(country_darwinian)
-dat_country_darwinian <- country_darwinian$data
-levels(dat_country_darwinian$continent)
-cont_levels <- levels(dat_country_darwinian$continent)
-vars_country_darwinian <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+fit <- readRDS("output/model/country_darwinian_gompertz_full.rds")
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$continent)
+w <- prop.table(table(dat$continent))
+cont_levels <- names(w)
+n_continent <- as.data.frame(table(dat$continent))
+names(n_continent) <- c("continent","n")
+
+vars_darwinian <- c(
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
-  "preserved_specimen", "sampling_effort", "range_rarity", "population_density"
+  "preserved_specimen", "sampling_effort","range_rarity", "population_density"
 )
 
-
-slopes_draws_country_darwinian <- map_dfr(
-  vars_country_darwinian,
-  ~ compute_continent_slopes(
+effect_counts_country_darwinian <- map_dfr(
+  vars_darwinian,
+  ~ compute_continent_hr(
     v             = .x,
-    draws         = draws_country_darwinian,
+    draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"  
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
-)
-
-table_country_darwinian <- slopes_draws_country_darwinian %>%
-  mutate(slope = as.numeric(slope)) %>%
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    continent = factor(continent, levels = cont_levels),
+    variable  = factor(variable, levels = vars_darwinian)
+  ) %>%
   group_by(variable, continent) %>%
   summarise(
-    median   = median(slope, na.rm = TRUE),
-    lower_95 = quantile(slope, 0.025, na.rm = TRUE),
-    upper_95 = quantile(slope, 0.975, na.rm = TRUE),
-    prob_pos = mean(slope > 0, na.rm = TRUE),   # P(β > 0)
+    median   = median(hr, na.rm = TRUE),
+    lower_95 = quantile(hr, 0.025, na.rm = TRUE),
+    upper_95 = quantile(hr, 0.975, na.rm = TRUE),
+    prob_pos = mean(hr > 1, na.rm = TRUE),   
     .groups  = "drop"
   ) %>%
-  arrange(variable, continent)
-
-
-sig_country_darwinian <- table_country_darwinian %>%
+  arrange(variable, continent) %>%
   mutate(
     effect_sign = case_when(
-      lower_95 > 0 ~ "positive",
-      upper_95 < 0 ~ "negative",
+      lower_95 > 1 ~ "positive",
+      upper_95 < 1 ~ "negative",
       TRUE         ~ "nonsignificant"
     )
-  )
-
-effect_counts_country_darwinian <- sig_country_darwinian %>%
+  ) %>%
   group_by(variable, effect_sign) %>%
   summarise(
     n = n(), 
@@ -524,8 +668,7 @@ effect_counts_country_darwinian <- sig_country_darwinian %>%
     n_signed = if_else(effect_sign == "positive", n, -n),
     shortfall = "Darwinian"
   )
-rm(country_darwinian,dat_country_darwinian,draws_country_darwinian,
-   sig_country_darwinian,slopes_draws_country_darwinian,table_country_darwinian)
+rm(fit,w,vars_darwinian,cont_levels,draws,dat,n_continent)
 
 ################################################################################
 effect_counts_country <- rbind(effect_counts_country_linnaean,
@@ -543,7 +686,7 @@ rename_map_country <- c(
   watertemp            = "Water temperature",
   elevation            = "Elevation",
   population_density   = "Human density",
-  taxonmic_effort      = "Taxonomic effort",
+  taxonomic_effort    = "Taxonomic effort",
   taxonomic_activity   = "Taxonomic activity",
   sampling_effort      = "Sampling effort",
   sequencing_effort    = "Sequencing effort"
@@ -581,15 +724,15 @@ p2 <- ggplot(effect_counts_plot_2,
   scale_fill_manual(
     values = nc_colors,
     breaks = c("positive", "negative"),
-    labels = c("Positive", "Negative"),
+    labels = c("HR>1", "HR<1"),
     name   = "Direction"
   ) +
   labs(
     x = NULL,
     y = expression("Number of continent with significant effects (" * italic(p) * " < 0.05)")
   ) +
-  annotate("text", x = 0.8, y = 6, label = "+",colour = "#4C78A8", face = "bold",size = 5)+
-  annotate("text", x = 0.8, y = -6, label = "-",colour = "#F58518", face = "bold",size = 5)+
+  # annotate("text", x = 0.8, y = 6, label = "HR>1",colour = "#4C78A8", face = "bold",size = 3)+
+  # annotate("text", x = 0.8, y = -6, label = "HR<1",colour = "#F58518", face = "bold",size = 3)+
   facet_wrap(. ~ shortfall, labeller = labeller(shortfall = custom_labels)) +
   theme_bw() +
   theme(

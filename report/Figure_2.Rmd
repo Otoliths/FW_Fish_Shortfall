@@ -1,5 +1,5 @@
 ---
-title: "Fig.2 Realm-specific slopes"
+title: "Fig.2 Realm-specific hazard ratio"
 output:
   html_document:
     toc: true
@@ -26,168 +26,390 @@ knitr::opts_chunk$set(
 ## Packages
 
 ```{r}
+rm(list = ls())
+library(xfun)
 library(brms)
 library(dplyr)
 library(purrr)
-library(tidyr)
 library(tidybayes)
 library(ggplot2)
-library(legendry) # This replaces ggh4x for nested guides
-library(ggh4x)
+library(legendry)
 library(ggtext)
 library(sf)
-library(rnaturalearth)
-library(patchwork)
 library(here)
-
-sf::sf_use_s2(FALSE)
+library(ggplot2)
+library(rnaturalearth) 
+library(ggspatial) 
+library(ggtext) # 
+library(patchwork)
+options(sf_use_s2 = F)
 options(warn = -1)
 ```
 
 ## Helpers
 
 ```{r}
-slopes_by_realm <- function(fit, vars, baseline_realm = "Afrotropic") {
-  draws <- posterior::as_draws_df(fit)
-  dat   <- fit$data
+# ---- helper: validate family and transform beta to HR ----
+.beta_to_hr <- function(beta,
+                        draws,
+                        family = c("weibull", "gompertz"),
+                        shape_col = "shape") {
+  family <- match.arg(family)
   
-  w <- prop.table(table(dat$biogeographic_realm))
-  realms <- names(w)
+  if (family == "gompertz") {
+    log_hr <- beta
+  } else if (family == "weibull") {
+    if (!shape_col %in% names(draws)) {
+      stop("No Weibull shape column found: ", shape_col)
+    }
+    shape  <- draws[[shape_col]]
+    log_hr <- -shape * beta
+  }
   
-  n_realm <- as.data.frame(table(dat$biogeographic_realm))
-  names(n_realm) <- c("realm", "n")
+  list(
+    log_hr = log_hr,
+    hr     = exp(log_hr)
+  )
+}
+
+# ---- helper: construct realm-specific beta ----
+.compute_realm_beta <- function(v,
+                                draws,
+                                cont_levels,
+                                baseline_realm = "Afrotropic",
+                                realm_var = "biogeographic_realm") {
+  base_name <- paste0("b_", v)
   
-  realm_slopes <- map_dfr(vars, function(v) {
-    b_main <- paste0("b_", v)
-    if (!b_main %in% names(draws)) stop("Missing coefficient: ", b_main)
-    
-    base <- draws[[b_main]]
-    meta <- draws %>% select(.chain, .iteration, .draw)
-    
-    out <- map_dfr(realms, function(rm) {
-      b <- if (rm == baseline_realm) {
-        base
+  if (!base_name %in% names(draws)) {
+    stop("No coefficient found for ", base_name)
+  }
+  
+  base <- draws[[base_name]]
+  
+  purrr::map_dfr(cont_levels, function(ct) {
+    if (ct == baseline_realm) {
+      beta <- base
+    } else {
+      inter_name <- paste0("b_", v, ":", realm_var, ct)
+      
+      # fallback: try reversed interaction naming if needed
+      inter_name_alt <- paste0("b_", realm_var, ct, ":", v)
+      
+      if (inter_name %in% names(draws)) {
+        beta <- base + draws[[inter_name]]
+      } else if (inter_name_alt %in% names(draws)) {
+        beta <- base + draws[[inter_name_alt]]
       } else {
-        b_int <- paste0("b_", v, ":biogeographic_realm", rm)
-        if (b_int %in% names(draws)) base + draws[[b_int]] else base
+        beta <- base
       }
-      tibble(realm = rm, slope = b)
-    })
-    
-    bind_cols(meta[rep(seq_len(nrow(meta)), times = length(realms)), ], out) %>%
-      mutate(variable = v)
-  }) %>%
-    mutate(
-      slope    = as.numeric(slope),
-      realm    = factor(realm, levels = realms),
-      variable = factor(variable, levels = vars)
-    ) %>%
-    group_by(variable, realm) %>%
-    tidybayes::median_qi(slope) %>%
-    ungroup() %>%
-    left_join(n_realm, by = "realm")
-  
-  global_slopes <- map_dfr(vars, function(v) {
-    b_main <- paste0("b_", v)
-    if (!b_main %in% names(draws)) stop("Missing coefficient: ", b_main)
-    
-    slope <- draws[[b_main]]
-    for (rm in realms[realms != baseline_realm]) {
-      b_int <- paste0("b_", v, ":biogeographic_realm", rm)
-      if (b_int %in% names(draws)) slope <- slope + as.numeric(w[rm]) * draws[[b_int]]
     }
     
-    tibble(variable = v, slope = slope)
-  }) %>%
-    mutate(slope = as.numeric(slope)) %>%
-    group_by(variable) %>%
-    tidybayes::median_qi(slope) %>%
-    ungroup() %>%
-    mutate(realm = "Global", n = nrow(dat))
-  
-  bind_rows(realm_slopes, global_slopes)
-}
-
-fit_slopes <- function(model_rds, family = c("lognormal", "gamma"), vars, shortfall,
-                       baseline_realm = "Afrotropic") {
-  family <- match.arg(family)
-  fit <- readRDS(model_rds)[[family]]
-  slopes_by_realm(fit, vars = vars, baseline_realm = baseline_realm) %>%
-    mutate(shortfall = shortfall)
-}
-
-map_one <- function(world, realms_sf, realm, fill, crs) {
-  ggplot() +
-    geom_sf(data = world, fill = "gray80", colour = NA, linewidth = 0.2) +
-    geom_sf(data = dplyr::filter(realms_sf, biogeographic_realm == realm),
-            fill = fill, colour = NA, linewidth = 0.2) +
-    coord_sf(crs = crs) +
-    theme_minimal() +
-    theme(
-      axis.text = element_blank(),
-      axis.title = element_blank(),
-      panel.grid.minor = element_blank(),
-      panel.grid.major = element_line(colour = "#ebebe5", linewidth = 0.01),
-      plot.margin = margin(0, 0, 0, 0)
+    tibble::tibble(
+      realm = ct,
+      beta  = beta
     )
+  })
 }
+
+# ---- realm-specific HR ----
+compute_realm_hr <- function(v,
+                             draws,
+                             cont_levels,
+                             baseline_realm = "Afrotropic",
+                             family = c("weibull", "gompertz"),
+                             shape_col = "shape",
+                             realm_var = "biogeographic_realm") {
+  family <- match.arg(family)
+  
+  req_meta <- c(".chain", ".iteration", ".draw")
+  has_meta <- req_meta[req_meta %in% names(draws)]
+  
+  if (length(has_meta) == 0) {
+    stop("draws must contain at least one posterior meta column such as .draw")
+  }
+  
+  meta_cols <- draws %>% dplyr::select(dplyr::all_of(has_meta))
+  
+  realm_beta <- .compute_realm_beta(
+    v = v,
+    draws = draws,
+    cont_levels = cont_levels,
+    baseline_realm = baseline_realm,
+    realm_var = realm_var
+  )
+  
+  trans <- .beta_to_hr(
+    beta = realm_beta$beta,
+    draws = draws[rep(seq_len(nrow(draws)), times = length(cont_levels)), , drop = FALSE],
+    family = family,
+    shape_col = shape_col
+  )
+  
+  out <- realm_beta %>%
+    dplyr::mutate(
+      log_hr = trans$log_hr,
+      hr     = trans$hr
+    )
+  
+  dplyr::bind_cols(
+    meta_cols[rep(seq_len(nrow(meta_cols)), times = length(cont_levels)), , drop = FALSE],
+    out
+  ) %>%
+    dplyr::mutate(
+      variable = v,
+      family   = family
+    ) %>%
+    dplyr::relocate(variable, family, realm, .after = dplyr::last_col())
+}
+
+# ---- global HR ----
+compute_global_hr <- function(v,
+                              draws,
+                              w,
+                              cont_levels,
+                              baseline_realm = "Afrotropic",
+                              family = c("weibull", "gompertz"),
+                              shape_col = "shape",
+                              realm_var = "biogeographic_realm") {
+  family <- match.arg(family)
+  
+  base_name <- paste0("b_", v)
+  
+  if (!base_name %in% names(draws)) {
+    stop("No coefficient found for ", base_name)
+  }
+  
+  if (is.null(names(w))) {
+    stop("w must be a named numeric vector with names matching cont_levels")
+  }
+  
+  if (!all(cont_levels %in% names(w))) {
+    missing_w <- cont_levels[!cont_levels %in% names(w)]
+    stop("Missing weights for: ", paste(missing_w, collapse = ", "))
+  }
+  
+  if (abs(sum(w[cont_levels]) - 1) > 1e-8) {
+    warning("Weights for cont_levels do not sum to 1")
+  }
+  
+  beta_global <- draws[[base_name]]
+  
+  for (ct in cont_levels[cont_levels != baseline_realm]) {
+    inter_name <- paste0("b_", v, ":", realm_var, ct)
+    inter_name_alt <- paste0("b_", realm_var, ct, ":", v)
+    
+    if (inter_name %in% names(draws)) {
+      beta_global <- beta_global + as.numeric(w[ct]) * draws[[inter_name]]
+    } else if (inter_name_alt %in% names(draws)) {
+      beta_global <- beta_global + as.numeric(w[ct]) * draws[[inter_name_alt]]
+    }
+  }
+  
+  trans <- .beta_to_hr(
+    beta = beta_global,
+    draws = draws,
+    family = family,
+    shape_col = shape_col
+  )
+  
+  tibble::tibble(
+    variable = v,
+    family   = family,
+    beta     = beta_global,
+    log_hr   = trans$log_hr,
+    hr       = trans$hr
+  )
+}
+
 
 ```
 
 
-## Variable sets
+## Variable
 
 ```{r}
+################################################################################
+fit <- readRDS(here("output", "model", "basin_linnaean_weibull_full.rds"))
+
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
 vars_linnaean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
-  "preserved_specimen", "sampling_effort", "sequencing_effort",
-  "range_rarity", "population_density"
+  "preserved_specimen", "sampling_effort","sequencing_effort", "range_rarity", "population_density"
 )
 
+global_hr_linnaean <- map_dfr(
+  vars_linnaean,
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels, family = "weibull")
+) %>%
+  mutate(hr = as.numeric(hr)) %>%   
+  group_by(variable) %>%
+  tidybayes::median_qi(hr) %>%
+  ungroup() %>%
+  mutate(realm = "Global",
+         n = nrow(dat))
+
+realm_hr_linnaean <- map_dfr(
+  vars_linnaean,
+  ~ compute_realm_hr(
+    v             = .x,
+    draws         = draws,
+    cont_levels   = cont_levels,
+    baseline_realm = "Afrotropic",
+    family = "weibull"
+  )
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_linnaean)
+  ) %>%
+  group_by(variable, realm) %>%
+  tidybayes::median_qi(hr) %>%
+  left_join(n_realm,by = "realm")
+
+
+linnaean_hr <- bind_rows(
+  realm_hr_linnaean,   
+  global_hr_linnaean       
+) %>%
+  mutate(shortfall = "Linnaean")
+
+rm(fit,w,vars_linnaean,cont_levels,realm_hr_linnaean,global_hr_linnaean,draws,dat,n_realm)
+################################################################################
+fit <- readRDS(here("output", "model", "basin_wallacean_gompertz_full.rds"))
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
 vars_wallacean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sequencing_effort", "range_rarity", "population_density"
 )
 
+global_hr_wallacean <- map_dfr(
+  vars_wallacean,
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels,family = "gompertz")
+) %>%
+  mutate(hr = as.numeric(hr)) %>%   
+  group_by(variable) %>%
+  tidybayes::median_qi(hr) %>%
+  ungroup() %>%
+  mutate(realm = "Global",
+         n = nrow(dat))
+
+realm_hr_wallacean <- map_dfr(
+  vars_wallacean,
+  ~ compute_realm_hr(
+    v             = .x,
+    draws         = draws,
+    cont_levels   = cont_levels,
+    baseline_realm = "Afrotropic",
+    family = "gompertz"
+  )
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_wallacean)
+  ) %>%
+  group_by(variable, realm) %>%
+  tidybayes::median_qi(hr) %>%
+  left_join(n_realm,by = "realm")
+
+
+wallacean_hr <- bind_rows(
+  realm_hr_wallacean,   
+  global_hr_wallacean       
+) %>%
+  mutate(shortfall = "Wallacean")
+
+rm(fit,w,vars_wallacean,cont_levels,realm_hr_wallacean,global_hr_wallacean,draws,dat,n_realm)
+################################################################################
+fit <- readRDS(here("output", "model", "basin_darwinian_gompertz_full.rds"))
+draws <- as_draws_df(fit)
+dat <- fit$data
+levels(dat$biogeographic_realm)
+w <- prop.table(table(dat$biogeographic_realm))
+cont_levels <- names(w)
+n_realm <- as.data.frame(table(dat$biogeographic_realm))
+names(n_realm) <- c("realm","n")
+
 vars_darwinian <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "watershed_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "watershed_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
-  "preserved_specimen", "sampling_effort", "range_rarity", "population_density"
+  "preserved_specimen", "sampling_effort","range_rarity", "population_density"
 )
+
+global_hr_darwinian <- map_dfr(
+  vars_darwinian,
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels,family = "gompertz")
+) %>%
+  mutate(hr = as.numeric(hr)) %>%   
+  group_by(variable) %>%
+  tidybayes::median_qi(hr) %>%
+  ungroup() %>%
+  mutate(realm = "Global",
+         n = nrow(dat))
+
+realm_hr_darwinian <- map_dfr(
+  vars_darwinian,
+  ~ compute_realm_hr(
+    v             = .x,
+    draws         = draws,
+    cont_levels   = cont_levels,
+    baseline_realm = "Afrotropic",
+    family = "gompertz"
+  )
+) %>%
+  mutate(
+    hr    = as.numeric(hr),
+    realm = factor(realm, levels = cont_levels),
+    variable  = factor(variable, levels = vars_darwinian)
+  ) %>%
+  group_by(variable, realm) %>%
+  tidybayes::median_qi(hr) %>%
+  left_join(n_realm,by = "realm")
+
+
+darwinian_hr <- bind_rows(
+  realm_hr_darwinian,   
+  global_hr_darwinian       
+) %>%
+  mutate(shortfall = "Darwinian")
+
+rm(fit,w,vars_darwinian,cont_levels,realm_hr_darwinian,global_hr_darwinian,draws,dat,n_realm)
 
 ```
 
-## Fit -> slopes (3 models)
+## Realm-specific hazard ratio (3 models)
 
 ```{r}
-# ---- Fit -> slopes (3 models) ----
-slopes <- bind_rows(
-  fit_slopes(
-    model_rds = here("output", "model", "basin_linnaean_all.rds"),
-    family    = "lognormal",
-    vars      = vars_linnaean,
-    shortfall = "Description"
-  ),
-  fit_slopes(
-    model_rds = here("output", "model", "basin_wallacean_all.rds"),
-    family    = "lognormal",
-    vars      = vars_wallacean,
-    shortfall = "Geolocation"
-  ),
-  fit_slopes(
-    model_rds = here("output", "model", "basin_darwinian_all.rds"),
-    family    = "gamma",
-    vars      = vars_darwinian,
-    shortfall = "Sequencing"
+data <- bind_rows(linnaean_hr, wallacean_hr, darwinian_hr) %>%
+  mutate(
+    shortfall = recode(
+      shortfall,
+      "Darwinian" = "Sequencing",
+      "Wallacean" = "Geolocation",
+      "Linnaean"  = "Description"
+    )
   )
-)
 
-# ---- Labels / factors ----
 rename_map <- c(
   body_size          = "Body size",
-  preserved_specimen = "N. preserved\nspecimens",
+  preserved_specimen = "N. preserved<br>specimens",
   range_size         = "Range size",
   range_rarity       = "Range rarity",
   latitude           = "Latitude",
@@ -196,7 +418,7 @@ rename_map <- c(
   watertemp          = "Water temperature",
   elevation          = "Elevation",
   population_density = "Human density",
-  taxonmic_effort    = "Taxonomic effort",
+  taxonomic_effort   = "Taxonomic effort",
   taxonomic_activity = "Taxonomic activity",
   sampling_effort    = "Sampling effort",
   sequencing_effort  = "Sequencing effort"
@@ -204,15 +426,18 @@ rename_map <- c(
 
 var_levels <- rev(unname(rename_map))
 
-slopes <- slopes %>%
+data <- data %>%
   mutate(
-    variable  = recode(as.character(variable), !!!rename_map),
+    variable  = recode(variable, !!!rename_map),
     variable  = factor(variable, levels = var_levels),
-    shortfall = factor(shortfall, levels = c("Sequencing", "Geolocation", "Description")),
-    realm     = recode(as.character(realm),
-                       "Australasia" = "Australasian",
-                       "Oceania"     = "Oceanian"),
-    realm     = factor(
+    shortfall = factor(shortfall,
+                       levels = c("Sequencing", "Geolocation", "Description")),
+    realm     = recode(
+      realm,
+      "Australasia" = "Australasian",
+      "Oceania"     = "Oceanian"
+    ),
+    realm = factor(
       realm,
       levels = c(
         "Nearctic","Neotropic","Palearctic",
@@ -220,14 +445,18 @@ slopes <- slopes %>%
       )
     ),
     group = case_when(
-      variable %in% c("Sequencing effort","Sampling effort","Taxonomic activity","Taxonomic effort") ~ "Activity",
+      variable %in% c("Sequencing effort","Sampling effort",
+                      "Taxonomic activity","Taxonomic effort") ~ "Activity",
       variable %in% c("Human density","Elevation") ~ "Access",
       variable %in% c("Water temperature","Streamflow") ~ "Environment",
-      variable %in% c("Watershed area","Latitude","Range rarity","Range size") ~ "Geography",
-      variable %in% c("N. preserved\nspecimens","Body size") ~ "Biology",
+      variable %in% c("Watershed area","Latitude",
+                      "Range rarity","Range size") ~ "Geography",
+      variable %in% c("N. preserved<br>specimens","Body size") ~ "Biology",
       TRUE ~ NA_character_
     ),
-    group = factor(group, levels = c("Activity","Access","Environment","Geography","Biology"))
+    group = factor(group,
+                   levels = c("Activity","Access",
+                              "Environment","Geography","Biology"))
   )
 
 set2_colors <- c(
@@ -239,29 +468,29 @@ set2_colors <- c(
 realms <- c(
   Afrotropic =
     "Afrotropic<br>
-        <span style='color:#D55E00;'>n=8,996</span><br>
-        <span style='color:#009E73;'>n=14,605</span><br>
-        <span style='color:#435792;'>n=14,322</span>",
+        <span style='color:#D55E00;'>n=8,970</span><br>
+        <span style='color:#009E73;'>n=14,618</span><br>
+        <span style='color:#435792;'>n=14,330</span>",
   Australasian =
     "Australasian<br>
         <span style='color:#D55E00;'>n=7,053</span><br>
-        <span style='color:#009E73;'>n=10,286</span><br>
-        <span style='color:#435792;'>n=10,318</span>",
+        <span style='color:#009E73;'>n=10,289</span><br>
+        <span style='color:#435792;'>n=10,319</span>",
   Indomalayan =
     "Indomalayan<br>
-        <span style='color:#D55E00;'>n=6,387</span><br>
-        <span style='color:#009E73;'>n=19,737</span><br>
-        <span style='color:#435792;'>n=18,868</span>",
+        <span style='color:#D55E00;'>n=6,386</span><br>
+        <span style='color:#009E73;'>n=19,759</span><br>
+        <span style='color:#435792;'>n=18,887</span>",
   Nearctic =
     "Nearctic<br>
         <span style='color:#D55E00;'>n=7,581</span><br>
-        <span style='color:#009E73;'>n=10,405</span><br>
+        <span style='color:#009E73;'>n=10,406</span><br>
         <span style='color:#435792;'>n=10,354</span>",
   Neotropic =
     "Neotropic<br>
-        <span style='color:#D55E00;'>n=15,413</span><br>
-        <span style='color:#009E73;'>n=22,726</span><br>
-        <span style='color:#435792;'>n=22,275</span>",
+        <span style='color:#D55E00;'>n=15,416</span><br>
+        <span style='color:#009E73;'>n=22,758</span><br>
+        <span style='color:#435792;'>n=22,302</span>",
   Oceanian =
     "Oceanian<br>
         <span style='color:#D55E00;'>n=16</span><br>
@@ -269,14 +498,14 @@ realms <- c(
         <span style='color:#435792;'>n=21</span>",
   Palearctic =
     "Palearctic<br>
-        <span style='color:#D55E00;'>n=5,180</span><br>
-        <span style='color:#009E73;'>n=19,843</span><br>
-        <span style='color:#435792;'>n=19,236</span>",
+        <span style='color:#D55E00;'>n=5,181</span><br>
+        <span style='color:#009E73;'>n=19,851</span><br>
+        <span style='color:#435792;'>n=19,243</span>",
   Global =
     "Global<br>
-        <span style='color:#D55E00;'>bayes R<sup>2</sup>=0.86</span><br>
-        <span style='color:#009E73;'>bayes R<sup>2</sup>=0.56</span><br>
-        <span style='color:#435792;'>bayes R<sup>2</sup>=0.54</span>"
+        <span style='color:#D55E00;'>bayes R<sup>2</sup>=0.78</span><br>
+        <span style='color:#009E73;'>bayes R<sup>2</sup>=0.64</span><br>
+        <span style='color:#435792;'>bayes R<sup>2</sup>=0.63</span>"
 )
 
 ```
@@ -286,111 +515,213 @@ realms <- c(
 
 ```{r}
 # ---- Main coefficient plot ----
-p_main <- ggplot(slopes, aes(x = slope, y = interaction(variable, group, sep = ":"), fill = shortfall, colour = shortfall)) +
-  annotate("rect", ymin = 0.5,  ymax = 4.5,  xmin = -Inf, xmax = Inf, fill = "grey95") +
-  annotate("rect", ymin = 4.5,  ymax = 6.5,  xmin = -Inf, xmax = Inf, fill = "grey90") +
-  annotate("rect", ymin = 6.5,  ymax = 8.5,  xmin = -Inf, xmax = Inf, fill = "grey95") +
-  annotate("rect", ymin = 8.5,  ymax = 12.5, xmin = -Inf, xmax = Inf, fill = "grey90") +
-  annotate("rect", ymin = 12.5, ymax = 14.5, xmin = -Inf, xmax = Inf, fill = "grey95") +
-  geom_vline(xintercept = 0, linetype = 2, linewidth = 0.4, colour = "gray50") +
+bg_x <- data %>%
+  group_by(realm) %>%
+  summarise(
+    xmin = min(.lower[.lower > 0], na.rm = TRUE),
+    xmax = max(.upper, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+bg_y <- tibble::tribble(
+  ~ymin, ~ymax, ~bg_fill,
+  0.5,   4.5,  "grey95",
+  4.5,   6.5,  "grey90",
+  6.5,   8.5,  "grey95",
+  8.5,  12.5,  "grey90",
+  12.5,  14.5,  "grey95"
+)
+
+bg_rect <- tidyr::crossing(bg_x, bg_y)
+
+
+p <- ggplot(
+  data = data,
+  aes(
+    x = hr,
+    y = interaction(variable, group, sep = ":"),
+    fill = shortfall,
+    colour = shortfall
+  )
+) +
+  geom_rect(
+    data = bg_rect,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = bg_rect$bg_fill,
+    colour = NA
+  ) +
+  geom_vline(xintercept = 1, linetype = 2, size = 0.4, color = "gray30") +
   geom_pointrange(
     aes(xmin = .lower, xmax = .upper),
     position = position_dodge(0.6),
     linewidth = 0.5, shape = 21, stroke = 0.2, size = 0.46
   ) +
-  scale_fill_manual(name = "First documentation", values = set2_colors, limits = c("Description","Geolocation","Sequencing")) +
-  scale_color_manual(name = "First documentation", values = set2_colors, limits = c("Description","Geolocation","Sequencing")) +
-  theme_classic() +
-  facet_wrap(~ realm, nrow = 1, scales = "free_x", labeller = labeller(realm = realms)) +
-  scale_y_discrete(
-    expand = c(0, 0),
-    guide  = legendry::guide_axis_nested(key = key_range_auto(sep = ":"),
-                                         # Customise the appearance of different levels using levels_text
-                                         levels_text = list(
-                                           element_text(colour = "black",size = 10), # Level 1 text (variable)
-                                           element_text(colour = "black", angle = 90, size = 10, hjust = 0.5)  # Level 2 text (group)
-                                         )
-                                         )
+  scale_fill_manual(
+    name = "First documentation",
+    values = set2_colors,
+    limits = c("Description", "Geolocation", "Sequencing")
   ) +
-  theme(
-    strip.background = element_blank(),
-    legend.title = element_text(colour = "black", size = 9),
-    legend.text  = element_text(colour = "black", size = 8),
-    legend.key.height = unit(0.5, "cm"),
-    axis.title = element_text(colour = "black", size = 10),
-    axis.text.x = element_text(colour = "black", size = 8),
-    strip.text  = element_markdown(size = 8),
-    axis.text.y = element_markdown(size = 8, colour = "black")
+  scale_color_manual(
+    name = "First documentation",
+    values = set2_colors,
+    limits = c("Description", "Geolocation", "Sequencing")
   ) +
-  ylab(NULL) +
-  xlab("Standardized coefficient (95% CI)")
+  scale_x_log10(
+    guide = "axis_logticks",
+    breaks = c(0.1, 1, 10),
+    labels = expression(10^-1, 10^0, 10^1)
+  ) +
+  facet_wrap(
+    ~ realm,
+    nrow = 1,
+    scales = "free_x",
+    labeller = labeller(realm = realms)
+  ) +
+  scale_y_discrete(expand = expansion(c(0, 0))) +
+  guides(
+    y = legendry::guide_axis_nested(
+      key = ":",
+      levels_text = list(
+        element_markdown(angle = 0, size = 8, vjust = 0.5, colour = "black"),
+        element_text(angle = 90, colour = "black", size = 8, hjust = 0.5, face = "bold")
+      )
+    )
+  ) +
+  theme_classic()+
+  theme(strip.background = element_blank(),  # Remove background for facet strips
+        legend.title = element_text(colour = "black", size = 9),  # Customize legend title
+        legend.text = element_text(colour = "black", size = 8),  # Customize legend text
+        legend.key.height = unit(0.5, "cm"),  # Adjust legend key height
+        legend.key = element_rect(fill = NA, colour = NA),
+        axis.title = element_text(colour = "black", size = 10),  # Customize axis titles
+        axis.text.x = element_text(colour = "black", size = 8),  # Customize x-axis text
+        strip.text = element_markdown(size = 8)
+  ) +  
+  ylab("") +  # Remove y-axis label
+  xlab("Hazard ratio (95% CI)")
 
-# ---- Inset maps (realms) ----
 inland <- readRDS(here("input", "raw", "basin", "basin_sf_v1.rds"))
-
-realm_union <- inland %>%
+inland_grouped <- inland %>%
   group_by(biogeographic_realm) %>%
-  summarise(geometry = st_union(geometry), .groups = "drop") %>%
-  st_wrap_dateline(options = "WRAPDATELINE=YES")
+  summarise(geometry = st_union(geometry), .groups = "drop") 
+inland_grouped_fixed <- st_wrap_dateline(inland_grouped, options = c("WRAPDATELINE=YES"))
+
 
 world <- ne_countries(scale = "small", returnclass = "sf") %>%
-  st_wrap_dateline(options = "WRAPDATELINE=YES")
+  st_wrap_dateline(options = c("WRAPDATELINE=YES"))
 
-realm_colors <- c(
-  "Afrotropic"    = "#D55E00",
-  "Australasia"   = "#0072B2",
-  "Indomalayan"   = "#009E73",
-  "Nearctic"      = "#F0E442",
-  "Neotropic"     = "#E69F00",
-  "Oceania"       = "#56B4E9",
-  "Palearctic"    = "#CC79A7"
-)
 
-p_nearctic   <- map_one(world, realm_union, "Nearctic",    realm_colors["Nearctic"],    "+proj=laea +lon_0=-100 +lat_0=30")
-p_neotropic  <- map_one(world, realm_union, "Neotropic",   realm_colors["Neotropic"],   "+proj=laea +lon_0=-90 +lat_0=0")
-p_palearctic <- map_one(world, realm_union, "Palearctic",  realm_colors["Palearctic"],  "+proj=laea +lon_0=70 +lat_0=30")
-p_afrotropic <- map_one(world, realm_union, "Afrotropic",  realm_colors["Afrotropic"],  "+proj=laea +lon_0=15 +lat_0=0")
-p_indomalay  <- map_one(world, realm_union, "Indomalayan", realm_colors["Indomalayan"], "+proj=laea +lon_0=90 +lat_0=10")
-p_austral    <- map_one(world, realm_union, "Australasia", realm_colors["Australasia"], "+proj=laea +lon_0=140 +lat_0=0")
-p_oceania    <- map_one(world, realm_union, "Oceania",     realm_colors["Oceania"],     "+proj=laea +lon_0=180 +lat_0=0")
-
-p_global <- ggplot() +
-  geom_sf(data = world, fill = "gray80", colour = NA, linewidth = 0.2) +
-  geom_sf(data = realm_union, aes(fill = biogeographic_realm), colour = NA, linewidth = 0.2, show.legend = FALSE) +
-  scale_fill_manual(values = realm_colors) +
-  coord_sf(crs = "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +datum=WGS84 +units=m +no_defs") +
+p1 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Nearctic"), fill = "#F0E442", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=-100 +lat_0=30")+
   theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p2 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Neotropic"), fill = "#E69F00", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=-90 +lat_0=0")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p3 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Palearctic"), fill = "#CC79A7", color = NA, size = 0) +  
+  coord_sf(crs = "+proj=laea +lon_0=70 +lat_0=30")+
+  theme_void() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p4 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Afrotropic"), fill = "#D55E00", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=15 +lat_0=0")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p5 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Indomalayan"), fill = "#009E73", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=90 +lat_0=10")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p6 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Australasia"), fill = "#0072B2", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=140 +lat_0=0")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+p7 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = filter(inland_grouped_fixed, biogeographic_realm == "Oceania"), fill = "#56B4E9", color = NA, size = 0.5) +  
+  coord_sf(crs = "+proj=laea +lon_0=180 +lat_0=0")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+
+p8 <- ggplot() +
+  geom_sf(data = world, fill = "gray80", color = NA, size = 0.2) +  
+  geom_sf(data = inland_grouped_fixed,aes(fill = biogeographic_realm), color = NA, size = 0.5, show.legend = F) +  
+  scale_fill_manual(values = c(
+    "Afrotropic" = "#D55E00",
+    "Australasia" = "#0072B2",
+    "Indomalayan" = "#009E73",
+    "Nearctic" = "#F0E442",
+    "Neotropic" = "#E69F00",
+    "Oceania" = "#56B4E9",
+    "Palearctic" = "#CC79A7"
+  ))+
+  coord_sf(crs = "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +datum=WGS84 +units=m +no_defs")+
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
+
+
+pp <- p1 +p2 +p3 +p4 +p5+p6+p7+p8 +plot_layout(nrow = 1)
+
+# 1) enlarge the top plot margin of p
+ppp <- p + 
   theme(
-    axis.text = element_blank(),
-    axis.title = element_blank(),
-    panel.grid.minor = element_blank(),
-    panel.grid.major = element_line(colour = "#ebebe5", linewidth = 0.01),
-    plot.margin = margin(0, 0, 0, 0)
+    plot.margin = unit(c(2, 0.05, 0.05,0), "cm"),   # ↑ leave room for inset
+    legend.position = c(-0.1, 1.1)           # ← adjust legend in p
   )
 
-p_inset_row <- p_nearctic + p_neotropic + p_palearctic + p_afrotropic +
-  p_indomalay + p_austral + p_oceania + p_global +
-  plot_layout(nrow = 1)
-
-# ---- Combine: inset above main plot ----
-p_final <- p_main +
-  theme(
-    plot.margin = unit(c(2, 0.05, 0.05, 0), "cm"),
-    legend.position = c(-0.1, 1.1)
-  ) +
+# 2) insert pp into p2, placed in the top margin area
+p_final <- ppp +
   inset_element(
-    p_inset_row,
-    left = 0.19, right = 1,
-    bottom = 0.95, top = 1.17,
+    pp,
+    left   = 0.17,   # adjust horizontally
+    right  = 1,
+    bottom = 0.94,   # allows pp to be above main panel
+    top    = 1.18,   # >1 allowed because align_to="plot"
     align_to = "plot"
   ) +
   theme(
-    legend.position = c(-0.1, 1.1),
+    legend.position = c(-0.1, 1.1),  # legend for entire inset layout
     legend.justification = c(1, 1),
-    plot.margin = unit(c(2, 0.05, 0.05, 0), "cm")
+    plot.margin = unit(c(2, 0.05, 0.05,0), "cm")
   )
 
 p_final
+
 ```
 
 ```{r}

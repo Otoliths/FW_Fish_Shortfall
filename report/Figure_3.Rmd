@@ -176,19 +176,19 @@ p_sens <- ggplot(scenario_by_q, aes(x = q, y = n, colour = scenario)) +
   labs(x = "Quantile threshold (q)", y = "Number of basins", colour = "Scenario") +
   theme_minimal()
 
-# ---- Scenario table (q = 0.25) ----
-df_q25 <- df %>%
+# ---- Scenario table (q = 0.3) ----
+df_q30 <- df %>%
   mutate(
-    LS_state = within_realm_state(., "LS", q = 0.25),
-    WS_state = within_realm_state(., "WS", q = 0.25),
-    DS_state = within_realm_state(., "DS", q = 0.25),
+    LS_state = within_realm_state(., "LS", q = 0.3),
+    WS_state = within_realm_state(., "WS", q = 0.3),
+    DS_state = within_realm_state(., "DS", q = 0.3),
     scenario = scenario_from_states(LS_state, WS_state, DS_state)
   )
 
 # If you already have basin_shortfalls_fix.csv, keep using it.
-# Otherwise you can write it from df_q25:
+# Otherwise you can write it from df_q30:
 # dir.create(here("output", "tables"), showWarnings = FALSE, recursive = TRUE)
-# write.csv(df_q25, path_out_tbl, row.names = FALSE)
+# write.csv(df_q30, path_out_tbl, row.names = FALSE)
 
 basin_shortfalls <- read.csv(path_out_tbl)
 
@@ -314,7 +314,8 @@ count_scenario_6 <- pts %>%
   bi_class(x=is_shortfall,y= is_hotspot,dim = 2) %>%
   group_by(scenario,bi_class) %>%
   summarise(n_cells = n(),.groups = "drop") %>%
-  mutate(scenario = 'LS* "" %down% "" *WS* "" %up% "" *DS* "" %down% ""')     
+  rbind(data.frame(scenario = NA,bi_class = "2-1",n_cells = 0)) %>%
+  mutate(scenario = 'LS* "" %down% "" *WS* "" %up% "" *DS* "" %down% ""')      
 
 count_scenario_7 <- pts %>%
   select(is_hotspot,scenario) %>%
@@ -447,13 +448,15 @@ p_nsc <- ggplot(dt_nsc) +
     name = "NSCI",
     na.value = "lightgrey",
     option = "C",
+    alpha = 1,
     begin = 0.1,
     end = 0.99,
     direction = -1,
     breaks = seq(0, 1, 0.5),
     labels = scales::number_format(accuracy = 0.1),
     guide = legendry::compose_sandwich(
-      middle = legendry::gizmo_density(just = 0.5),
+      middle = gizmo_histogram(hist.args = list(breaks = 8),just = 1),
+      #middle = legendry::gizmo_density(just = 1), #https://teunbrand.github.io/legendry/articles/guide_composition.html
       text   = "axis_base"
     )
   ) +

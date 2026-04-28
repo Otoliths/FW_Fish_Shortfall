@@ -1,281 +1,208 @@
 # ------------------------------------------------------------------------------
-# Supplementary Figure S16 Potential predictor variables
+# Supplementary Figure S16 
+# Patterns of known species descriptions, spatial distribution, and phylogenetic coverage in global freshwater fishes
 # ------------------------------------------------------------------------------
 
+library(viridis)
+library(rnaturalearth)
 library(dplyr)
+library(sf)
 library(ggplot2)
-library(magrittr)
-library(data.table)
-library(arrow)
+library(tidyr)
+library(stringr)
+library(grid)  
 library(patchwork)
-library(ggh4x)
+library(minpack.lm) 
+options(sf_use_s2 = FALSE)
+data <- openxlsx::read.xlsx("input/raw/cas_freshwater_v1.xlsx")
+################################################################################
+# species discovery
+sp <- data %>% dplyr::select(valid_name,year_description)
+# Count species descriptions per year
+species_per_year <- sp %>%
+  count(year_description) %>%
+  complete(year_description = 1758:2024, fill = list(n = 0)) %>%  # Fill missing years with 0
+  arrange(year_description) %>%  # Ensure chronological order
+  mutate(cumulative_species = cumsum(n), # Compute cumulative count
+         cumulative_fraction = cumulative_species / max(cumulative_species) # Normalize to [0,1]
+  )  
+# Plot cumulative species descriptions over time
+p1 <- ggplot(species_per_year, aes(x = year_description)) +
+  geom_line(aes(y = cumulative_species),color = "#D55E00", linewidth = 0.5) +
+  labs(#title = "Cumulative number of described species", 
+    x = "Year", 
+    y = "Cumulative number of described species") +
+  theme_minimal()+
+  theme(axis.title = element_text(colour = "black", face = "bold", size = 8),
+        axis.text = element_text(colour = "black", size = 7),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(linetype = 2,linewidth = 0.5)
+  )
 
-body_size <- readRDS("input/data_prep/body_size.rds")
-watershed_area <- readRDS("input/data_prep/watershed_area.rds")
-latitude <- read_parquet("input/data_prep/basin_latitude_avg.parquet")
-elevation <- read_parquet("input/data_prep/basin_elevation.parquet")
-range_size <- read_parquet("input/data_prep/basin_range_size.parquet")
-taxonmic_effort <- readRDS("input/data_prep/taxonmic_effort.rds")
-taxonomic_activity <- readRDS("input/data_prep/taxonomic_activity.rds")
+# Plot annual species descriptions
+p2 <- ggplot(species_per_year, aes(x = year_description, y = n)) +
+  geom_col(fill = "#D55E00",width = 0.5) +
+  #geom_smooth()+
+  labs(#title = "Annual Number of Newly Described Species", 
+    x = "Year", 
+    y = "Annual number of newly-described species") +
+  theme_minimal()+
+  theme(axis.title = element_text(colour = "black", face = "bold", size = 8),
+        axis.text = element_text(colour = "black", size = 7),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(linetype = 2,linewidth = 0.5))
 
-discharge <- read_parquet("input/data_prep/basin_discharge_avg_year.parquet")
-watertemp <- read_parquet("input/data_prep/basin_watertemp_avg_year.parquet")
-preserved_specimen <- read_parquet("input/data_prep/basin_preserved_specimen.parquet")
-sequencing_effort <- read_parquet("input/data_prep/basin_sequencing_effort.parquet")
-sampling_effort <- read_parquet("input/data_prep/basin_sampling_effort.parquet")
-rarity <- read_parquet("input/data_prep/basin_rarity.parquet")
-population_density <- read_parquet("input/data_prep/basin_population_density.parquet")
+# combine
+p1+p2
+ggsave("figures/supplement/Figure_S16_A.png", width = 20, height = 8, units = "cm", dpi = 300)
+################################################################################
+df <- data %>%
+  mutate(basin = str_split(basin, ";")) %>%        
+  mutate(basin = lapply(basin, unique)) %>%        
+  mutate(basin = lapply(basin, sort)) %>%
+  unnest(basin) %>%
+  group_by(basin) %>%
+  summarise(count = n())
 
-
-p01 <- ggplot(data = body_size, aes(log_length_max)) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#6C8F5D80", colour = "#6C8F5D80", alpha = 0.5)+
-  xlab(expression(log[10] * "(Body size (mm))"))+
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Biology",hjust = 1.05, colour = "#6C8F5D80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-
-p02 <- preserved_specimen %>%
-  group_by(basin_id, year) %>%
-  summarise(
-    preserved_incidence = sum(preserved_specimen, na.rm = TRUE),  # 
-    .groups = "drop"
-  ) %>%
-  arrange(basin_id, year) %>%
-  group_by(basin_id) %>%
-  mutate(
-    preserved_cum = cumsum(preserved_incidence)
-  ) %>%
-  ungroup() %>%
-  ggplot(aes(x = year, y = preserved_cum, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.2, linewidth = 0.2, na.rm = TRUE,colour = "#6C8F5D80"),dpi=300) +
-  xlab("Year") +
-  ylab("N. preserved specimen") +
-  
-  scale_x_continuous(breaks = c(1800,1900,2000))+
-  scale_y_log10(
-    breaks = c(0, 1, 10, 100, 1000,10000,100000,1000000,10000000),
-    labels = function(x) {
-      ifelse(
-        x %in% c(0, 1, 10, 100, 1000,10000,100000,1000000,10000000),
-        parse(text = paste0("10^", log10(x))),
-        as.character(x)
-      )
-    }
-  )+
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Biology",hjust = 1.05, colour = "#6C8F5D80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+inland <- readRDS("input/raw/basin/basin_sf_v1.rds")
+setdiff(unique(inland$basin),df$basin)
+setdiff(df$basin,unique(inland$basin))
 
 
-p03 <- ggplot(data = range_size, aes(log10(range_size+1))) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#6D4D8080", colour = "#6D4D8080", alpha = 0.5)+
-  xlab(expression(log[10] * "(Range size)")) + 
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Geography",hjust = 1.05, colour = "#6D4D8080",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+dt <- inland
 
-p04 <- rarity %>%
-  group_by(basin_id, sampling_year) %>%
-  summarise(
-    rarity_longterm = mean(relative_rarity_cummean, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  ggplot(aes(x = sampling_year, y = rarity_longterm, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.1, linewidth = 0.2, na.rm = TRUE,colour = "#6D4D8080"),dpi=300) +
-  xlab("Year") +
-  ylab("Range rarity") +
-  scale_x_continuous(breaks = c(1800,1900,2020),limits = c(1758,2024))+
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Geography",hjust = 1.05, colour = "#6D4D8080",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-p05 <- ggplot(data = latitude, aes(latitude)) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#6D4D8080", colour = "#6D4D8080", alpha = 0.5)+
-  xlab("Latitude") +
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Geography",hjust = 1.05, colour = "#6D4D8080",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-p06 <- ggplot(data = watershed_area, aes(log10(area_km2))) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#6D4D8080", colour = "#6D4D8080", alpha = 0.5)+
-  xlab(expression(log[10] * "(Watershed area (km"^2*"))")) +
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Geography",hjust = 1.05, colour = "#6D4D8080",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+world_map <- ne_countries(scale = 50, type = "countries", returnclass = "sf")
 
 
-p07 <- ggplot(discharge, aes(x = year, y = discharge, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.02, linewidth = 0.2, na.rm = TRUE,colour = "#A3473E80"),dpi = 300) +
-  xlab("Year") +
-  ylab(expression("Streamflow (m"^3*"/s)")) +
-  theme_classic() +
-  scale_y_log10(
-    breaks = c(0, 1, 10, 100, 1000),
-    labels = function(x) {
-      ifelse(
-        x %in% c(0, 1, 10, 100, 1000),
-        parse(text = paste0("10^", log10(x))),
-        as.character(x)
-      )
-    }
-  )+
-  scale_x_continuous(limits = c(1976,2024), breaks = c(1980,1990,2000,2010,2020))+
-  annotate("text",x = Inf, y = Inf,label = "Environment",hjust = 1.1, colour = "#A3473E80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+moll_proj <- st_crs("+proj=moll")
 
 
-p08 <- ggplot(data = watertemp, aes(x = year, y = watertemp-273.15, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.02, linewidth = 0.2, na.rm = TRUE,colour = "#A3473E80"),dpi=300) +
-  xlab("Year") +
-  ylab(expression("Water temperature ("*degree*C*")")) +
-  theme_classic()+
-  scale_x_continuous(limits = c(1976,2024), breaks = c(1980,1990,2000,2010,2020))+
-  annotate("text",x = Inf, y = Inf,label = "Environment",hjust = 1.1, colour = "#A3473E80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+lat_points <- data.frame(lon = 0, lat = c(-60, 90)) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
 
 
-p09 <- ggplot(data = elevation, aes(elevation)) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#4E6E8E80", colour = "#4E6E8E80", alpha = 0.5)+
-  xlab("Elevation (m)") +
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Access",hjust = 1.05, colour = "#4E6E8E80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+projected_points <- st_transform(lat_points, crs = moll_proj)
 
-p10 <- population_density %>%
-  group_by(basin_id, year) %>%
-  summarise(
-    population_density = mean(population_density, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  ggplot(aes(x = year, y = log10(population_density+1), group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.1, linewidth = 0.2, na.rm = TRUE,colour = "#4E6E8E80"),dpi=300) +
-  xlab("Year") +
-  ylab(expression(log[10] * "(Human density)")) +
-  scale_x_continuous(breaks = c(1800,1900,2020),limits = c(1758,2024))+
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Access",hjust = 1.05, colour = "#4E6E8E80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
+y_limits <- st_coordinates(projected_points)[, "Y"]
 
 
-p11 <- ggplot(data = taxonmic_effort, aes(taxonmic_effort)) +
-  #ggrastr::rasterize(geom_rug(col = "#6D4D80", alpha = 0.5), dpi = 300)+
-  geom_density(fill = "#8A6A3F80", colour = "#8A6A3F80", alpha = 0.5)+
-  xlab("Taxonomic effort") + 
-  ylab("Density") +
-  theme_classic()+
-  scale_x_continuous(breaks = c(0,2,4,6,8))+
-  annotate("text",x = Inf, y = Inf,label = "Activity",hjust = 1.05, colour = "#8A6A3F80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-
-p12 <- ggplot(data = taxonomic_activity, aes(log10(taxonomic_activity+1))) +
-  geom_density(fill = "#8A6A3F80", colour = "#8A6A3F80", alpha = 0.5)+
-  xlab(expression(log[10] * "(Taxonomic activity)")) + 
-  ylab("Density") +
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Activity",hjust = 1.05, colour = "#8A6A3F80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-p13 <- sampling_effort %>%
-  group_by(basin_id, sampling_year) %>%
-  summarise(
-    sampling_incidence = sum(sampling_effort, na.rm = TRUE),  # 
-    .groups = "drop"
-  ) %>%
-  arrange(basin_id, sampling_year) %>%
-  group_by(basin_id) %>%
-  mutate(
-    sampling_cum = cumsum(sampling_incidence)
-  ) %>%
-  ungroup() %>%
-  ggplot(aes(x = sampling_year, y = sampling_cum, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.1, linewidth = 0.2, na.rm = TRUE,colour = "#8A6A3F80"),dpi=300) +
-  xlab("Year") +
-  ylab("Sampling effort") +
-  scale_x_continuous(breaks = c(1800,1900,2020),limits = c(1758,2024))+
-  scale_y_log10(
-    breaks = c(0, 1, 10, 100, 1000,10000),
-    labels = function(x) {
-      ifelse(
-        x %in% c(0, 1, 10, 100, 1000,10000),
-        parse(text = paste0("10^", log10(x))),
-        as.character(x)
-      )
-    }
-  )+
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Activity",hjust = 1.05, colour = "#8A6A3F80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-
-p14 <- sequencing_effort %>%
-  group_by(basin_id, sequencing_year) %>%
-  summarise(
-    sequencing_incidence = sum(sequencing_effort, na.rm = TRUE),  # 
-    .groups = "drop"
-  ) %>%
-  arrange(basin_id, sequencing_year) %>%
-  group_by(basin_id) %>%
-  mutate(
-    sequencing_cum = cumsum(sequencing_incidence)
-  ) %>%
-  ungroup() %>%
-  ggplot(aes(x = sequencing_year, y = sequencing_cum, group = basin_id)) +
-  ggrastr::rasterize(geom_line(alpha = 0.1, linewidth = 0.2, na.rm = TRUE,colour = "#8A6A3F80"),dpi=300) +
-  xlab("Year") +
-  ylab("Sequencing effort") +
-  scale_x_continuous(breaks = c(1990,2000,2010,2020),limits = c(1985,2024))+
-  scale_y_log10(
-    breaks = c(0, 1, 10, 100, 1000,10000),
-    labels = function(x) {
-      ifelse(
-        x %in% c(0, 1, 10, 100, 1000,10000),
-        parse(text = paste0("10^", log10(x))),
-        as.character(x)
-      )
-    }
-  )+
-  theme_classic()+
-  annotate("text",x = Inf, y = Inf,label = "Activity",hjust = 1.05, colour = "#8A6A3F80",
-           vjust = 1.2,size = 2.5,fontface = "bold")
-
-
-library(cowplot)
-plots <- list(
-  p01, p02, p03, p04,
-  p05, p06, p07, p08,
-  p09, p10, p11, p12,
-  p13, p14
-)
-base_theme <- theme(plot.margin = margin(c(0.3,0.3,0.3,0.3)),
-                    axis.title = element_text(size = 8),
-                    axis.text = element_text(size = 6))
-
-plots <- lapply(plots, `+`, base_theme)
-plot_grid(
-  plotlist   = plots,
-  nrow       = 4,
-  labels     = LETTERS,
-  label_fontface = "bold",
-  label_colour   = "black",
-  label_size     = 9,
-  label_x        = 0.02,
-  label_y        = 0.98,
-  hjust          = 0,
-  vjust          = 1
+dt$count_group <- cut(
+  dt$n_species,
+  breaks = c(1, 10, 25, 50, 100, 500, 1000,1500,Inf),  
+  labels = c("<10","10-25","25-50" ,"50-100", "100-500","500-1000","1000-1500",">1500"),  
+  include.lowest = TRUE
 )
 
+table(dt$count_group)
+original_colors <- c("#B4E4D6", "#6DCFB0", "#009E73", "#006D4F", "#003D2C")
+custom_colors <- colorRampPalette(original_colors)(8)
+dt_fixed <- st_wrap_dateline(dt, options = c("WRAPDATELINE=YES"))
 
-ggsave("figures/supplement/Figure_S16.png",dpi = 300, units = "cm", width = 21, height = 20)
+p3 <- ggplot(data = dt_fixed) +
+  #geom_sf(data = world_map, fill = "lightgrey", colour = NA) +  # 背景地图
+  #geom_sf(aes(fill = count_group), colour = NA) +  # 按分段填充颜色
+  ggrastr::rasterise(geom_sf(data = world_map, fill = "lightgrey", colour = NA) ,dpi = 300)+
+  ggrastr::rasterise(geom_sf(aes(fill = count_group), colour = NA) ,dpi = 300)+
+  scale_fill_manual(
+    values = custom_colors,  
+    name = "Number of freshwater fish per drainage basin",  
+    na.translate = FALSE  
+  ) +
+  theme_void() +  
+  theme(
+    panel.border = element_blank(),  
+    legend.position = "bottom",  
+    #legend.position = c(0.6,0.1),
+    legend.text = element_text(size = 5),
+    legend.title = element_text(hjust = 0.5,face = "bold",size = 6),  
+    legend.box = "horizontal"  
+  ) +
+  guides(
+    fill = guide_legend(
+      title.position = "top",  
+      title.hjust = 0.5,  
+      label.position = "bottom",  
+      keywidth = 1.3,  
+      keyheight = 0.4,  
+      nrow = 1  
+    )
+  ) +
+  coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE)
 
+ggsave("figures/supplement/Figure_S16_B.png", width = 12, height = 10, units = "cm", dpi = 300)
+################################################################################
+library(arrow)
+tre <- readRDS("input/raw/fish_tree_final.rds")
+seq_annotation <- read_parquet("input/raw/seq_annotation_v1.parquet")
+length(unique(seq_annotation$valid_name))
+# 10756(57%)
+tre$tip.label <- gsub("[*]*$", "", tre$tip.label)
+
+meta_data <- data.frame(
+  label = gsub("[*]*$", "", tre$tip.label)
+)
+meta_data$Status <- NA
+meta_data$Status <- ifelse(gsub("_"," ",meta_data$label) %in% unique(seq_annotation$valid_name),"exist","grafted")
+
+# if (!require("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# 
+# BiocManager::install("ggtree")
+library(ggstar)
+library(ggtree)
+library(ggtreeExtra)  # geom_fruit() #BiocManager::install("ggtreeExtra")
+
+tree_df <- full_join(as_tibble(tre), meta_data, by = c("label" = "label"))
+p <- ggtree(tre,layout = "fan", open.angle = 180,linewidth=0.15,col = "lightgrey") +
+  geom_rootedge(rootedge = 40,col = "lightgrey",linewidth = 0.15)
+
+tree_df <- p$data %>% 
+  left_join(meta_data, by = c("label" = "label"))
+
+pp <- p + 
+  geom_tree(data = tree_df, aes(color = Status), size = 0.15) +
+  scale_color_manual(values = c("exist" = "#435792", "grafted" = "#8A2BE2"),na.value = NA)
+
+p4 <- pp + 
+  geom_fruit(
+    data = meta_data, 
+    #geom = geom_point,  
+    geom = geom_star,
+    mapping = aes(y = label, colour = Status),
+    starshape = 28, size = 0.05
+  ) +
+  scale_colour_manual("Sequence (%)",
+                      values = c("exist" = "#435792", "grafted" = "#8A2BE2"),na.value = NA,
+                      labels = c("exist" = "Available (57%)", "grafted" = "Unavailable (43%)")
+  ) +
+  theme(
+    legend.position = "none",
+    legend.title = element_text(face = "bold", size = 6, hjust = 0, vjust = 0),
+    legend.text = element_text(size = 5),
+    legend.spacing.y = unit(0, "cm"),
+    legend.background = element_blank()
+  ) +
+  guides(colour = guide_legend(
+    override.aes = list(size = 3, shape = 15)
+  ))
+
+p4
+
+ggsave("figures/supplement/Figure_S16_C.png", width = 10, height = 12, units = "cm", dpi = 300)
+
+ggplot(data = data.frame(type = c("Available","Unavailable"),
+                         n = c(57,43)))+
+  geom_col(aes(type,n, fill = type),show.legend = F, width = 0.1)+
+  geom_text(aes(type,n+5, label = paste0(n,"%")),size = 5)+
+  scale_fill_manual(values = c("Available" = "#435792", "Unavailable" = "#8A2BE2"))+
+  coord_flip()+
+  scale_x_discrete(expand = c(0.1,0.1))+
+  scale_y_continuous(limits = c(0,100),expand = c(0,0))+
+  xlab("")+
+  ylab("Percentage (%)")+
+  theme_classic()+
+  theme(axis.line.y = element_blank(),
+        axis.line.x = element_line(colour = "black",linewidth = 0.2),
+        axis.ticks = element_line(colour = "black",linewidth = 0.2),
+        axis.text = element_text(face = "bold",size = 10,colour = "black"),
+        axis.title = element_text(face = "bold",size = 10,colour = "black"))

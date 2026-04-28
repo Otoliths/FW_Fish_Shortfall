@@ -24,10 +24,9 @@ packageVersion("progressr")
 # ------------------------------------------------------------------------------
 # 1. Predictor set and variable groups (Darwinian version)
 # ------------------------------------------------------------------------------
-
 predictors_D <- c(
   "body_size",
-  "taxonmic_effort",
+  "taxonomic_effort",
   "taxonomic_activity",
   "watershed_area",
   "range_size",
@@ -47,7 +46,7 @@ var_groups_D <- list(
   Geography   = c("range_size", "range_rarity", "latitude", "watershed_area"),
   Environment = c("discharge", "watertemp"),
   Access      = c("elevation", "population_density"),
-  Activity    = c("taxonmic_effort", "taxonomic_activity", "sampling_effort")
+  Activity    = c("taxonomic_effort", "taxonomic_activity", "sampling_effort")
 )
 
 # ------------------------------------------------------------------------------
@@ -56,8 +55,8 @@ var_groups_D <- list(
 #    event = 1 for sequenced species, 0 for right-censored
 # ------------------------------------------------------------------------------
 
-fit_D  <- readRDS("output/model/basin_darwinian_all.rds")$gamma
-dat_D  <- readRDS("output/stan_survdata_basin_darwinian.rds")
+fit_D  <- readRDS("output/model/basin_darwinian_gompertz_full.rds")
+dat_D  <- readRDS("output/stan_survdata_basin_darwinian_single.rds")
 
 realms <- levels(dat_D$biogeographic_realm)
 
@@ -67,30 +66,145 @@ draw_ids <- sample(
 )
 
 # ------------------------------------------------------------------------------
-# 3. Posterior draw-specific prediction for expected delay (mu)
-#    Gamma with log link: posterior_linpred(dpar = "mu", transform = TRUE)
+# 3. Gompertz survival and mean
+#    brms Gompertz parameterisation:
+#      mu    = rate parameter, usually with log link
+#      gamma = shape parameter, usually with identity link
+#
+#    Survival:
+#      S(t) = exp(-(mu / gamma) * (exp(gamma * t) - 1)),  gamma != 0
+#      S(t) = exp(-mu * t),                               gamma -> 0
+#
+#    Mean:
+#      E[T] = integral_0^Inf S(t) dt
+# ------------------------------------------------------------------------------
+
+gompertz_surv <- function(t, mu, gamma, eps = 1e-8) {
+  out <- numeric(length(t))
+  near0 <- abs(gamma) < eps
+  
+  if (any(near0)) {
+    out[near0] <- exp(-mu[near0] * t[near0])
+  }
+  
+  if (any(!near0)) {
+    g  <- gamma[!near0]
+    m  <- mu[!near0]
+    tt <- t[!near0]
+    out[!near0] <- exp(-(m / g) * (exp(g * tt) - 1))
+  }
+  
+  out
+}
+
+gompertz_mean <- function(mu, gamma, eps = 1e-8,
+                          rel.tol = 1e-8,
+                          subdivisions = 1000L,
+                          tail_tol = 1e-10,
+                          max_upper = 1e6) {
+  stopifnot(length(mu) == length(gamma))
+  
+  out <- rep(NA_real_, length(mu))
+  
+  for (i in seq_along(mu)) {
+    m <- mu[i]
+    g <- gamma[i]
+    
+    if (!is.finite(m) || !is.finite(g) || m <= 0) {
+      out[i] <- NA_real_
+      next
+    }
+    
+    # Under this parameterisation, if gamma < 0, the mean is not finite
+    if (g < -eps) {
+      out[i] <- Inf
+      next
+    }
+    
+    # Exponential limit
+    if (abs(g) < eps) {
+      out[i] <- 1 / m
+      next
+    }
+    
+    surv_i <- function(t) {
+      exp(-(m / g) * (exp(g * t) - 1))
+    }
+    
+    upper <- 1
+    while (upper < max_upper && surv_i(upper) > tail_tol) {
+      upper <- upper * 2
+    }
+    
+    integ <- try(
+      stats::integrate(
+        surv_i,
+        lower = 0,
+        upper = upper,
+        rel.tol = rel.tol,
+        subdivisions = subdivisions
+      ),
+      silent = TRUE
+    )
+    
+    if (inherits(integ, "try-error")) {
+      out[i] <- NA_real_
+    } else {
+      out[i] <- integ$value
+    }
+  }
+  
+  out
+}
+
+# ------------------------------------------------------------------------------
+# 4. Posterior draw-specific prediction for expected sequencing delay
+#    Documentation -> delay framework:
+#      response = realised sequencing delay
+#      prediction = expected delay E[T] under the Gompertz model
 # ------------------------------------------------------------------------------
 
 predict_D_delay_single_draw <- function(fit,
                                         newdata,
                                         draw_id,
                                         re_formula = NA) {
-  mu <- posterior_linpred(
+  # Linear predictor for mu
+  eta_mu <- posterior_linpred(
     fit,
     newdata    = newdata,
-    dpar       = "mu",       # mean parameter of the gamma distribution
+    dpar       = "mu",
     draw_ids   = draw_id,
     re_formula = re_formula,
-    transform  = TRUE        # back-transform from log-link to time scale
+    transform  = FALSE
   )
-  as.numeric(mu)
+  eta_mu <- as.numeric(eta_mu)
+  
+  # Linear predictor for gamma
+  eta_gamma <- posterior_linpred(
+    fit,
+    newdata    = newdata,
+    dpar       = "gamma",
+    draw_ids   = draw_id,
+    re_formula = re_formula,
+    transform  = FALSE
+  )
+  eta_gamma <- as.numeric(eta_gamma)
+  
+  # Inverse links
+  mu    <- exp(eta_mu)   # log link
+  gamma <- eta_gamma     # identity link
+  
+  mean_delay <- gompertz_mean(mu = mu, gamma = gamma)
+  
+  as.numeric(mean_delay)
 }
 
-make_predict_fun_D_delay <- function(fit, draw_id) {
-  force(fit); force(draw_id)
+# Use the model passed by DALEX, rather than capturing fit_D in the closure
+make_predict_fun_D_delay <- function(draw_id) {
+  force(draw_id)
   function(model, newdata) {
     predict_D_delay_single_draw(
-      fit        = fit,
+      fit        = model,
       newdata    = newdata,
       draw_id    = draw_id,
       re_formula = NA
@@ -99,11 +213,12 @@ make_predict_fun_D_delay <- function(fit, draw_id) {
 }
 
 # ------------------------------------------------------------------------------
-# 4. Pre-split data by realm (only species with observed sequencing events)
+# 5. Pre-split data by realm
+#    Documentation logic: use only species with realised sequencing delay
 # ------------------------------------------------------------------------------
 
 dat_D_by_realm <- dat_D %>%
-  filter(event == 1) %>%                 # use only species with realised delay
+  dplyr::filter(event == 1) %>%
   split(.$biogeographic_realm)
 
 job_grid_D <- tidyr::expand_grid(
@@ -112,31 +227,42 @@ job_grid_D <- tidyr::expand_grid(
 )
 
 # ------------------------------------------------------------------------------
-# 5. Parallel plan (adjust workers if needed)
+# 6. Parallel plan
 # ------------------------------------------------------------------------------
 
-plan(multisession, workers = 72L)
+plan(multisession, workers = 10L)
 
 # ------------------------------------------------------------------------------
-# 6. Variable-wise importance for sequence acquisition delay
+# 7. MSE loss function
+#    With continuous delay outcome, this is ordinary MSE
 # ------------------------------------------------------------------------------
-# > **Note:** The following code block is commented out by default due to its computational cost (~2 hours).  
-# > To reproduce the results, please **uncomment** the code.
+
+mse_loss <- function(observed, predicted) {
+  ok <- is.finite(observed) & is.finite(predicted)
+  if (!any(ok)) return(NA_real_)
+  mean((observed[ok] - predicted[ok])^2)
+}
+attr(mse_loss, "loss_name") <- "MSE"
+
+# ------------------------------------------------------------------------------
+# 8. Variable-wise importance for sequence acquisition delay
+#    Reported as increase in mean squared error (ΔMSE)
+# ------------------------------------------------------------------------------
 
 # with_progress({
-#   p <- progressor(steps = nrow(job_grid_D)) 
+#   p <- progressor(steps = nrow(job_grid_D))
+#   
 #   results_D_varwise <- job_grid_D %>%
 #     furrr::future_pmap_dfr(function(realm, draw_id) {
 #       p(message = paste("Realm:", realm, "| Draw:", draw_id))
 #       dat_r <- dat_D_by_realm[[realm]]
 #       
-#       # skip empty realms
 #       if (is.null(dat_r) || nrow(dat_r) == 0) {
 #         return(tibble(
-#           realm        = character(0),
-#           draw_id      = integer(0),
-#           variable     = character(0),
-#           dropout_loss = numeric(0)
+#           realm     = character(0),
+#           draw_id   = integer(0),
+#           variable  = character(0),
+#           delta_mse = numeric(0)
 #         ))
 #       }
 #       
@@ -144,7 +270,6 @@ plan(multisession, workers = 72L)
 #       y_r <- dat_r$time   # observed sequence acquisition delay
 #       
 #       pred_fun <- make_predict_fun_D_delay(
-#         fit     = fit_D,
 #         draw_id = draw_id
 #       )
 #       
@@ -158,46 +283,48 @@ plan(multisession, workers = 72L)
 #       )
 #       
 #       mp <- DALEX::model_parts(
-#         explainer = expl,
-#         type      = "variable_importance",
-#         B         = 10
+#         explainer     = expl,
+#         loss_function = mse_loss,
+#         type          = "difference",
+#         B             = 10
 #       )
 #       
 #       mp_df <- if ("result" %in% names(mp)) mp$result else mp
 #       
 #       mp_df %>%
 #         dplyr::filter(variable != "_full_model_") %>%
-#         transmute(
-#           realm        = realm,
-#           draw_id      = draw_id,
-#           variable     = variable,
-#           dropout_loss = dropout_loss
+#         dplyr::transmute(
+#           realm     = realm,
+#           draw_id   = draw_id,
+#           variable  = variable,
+#           delta_mse = dropout_loss
 #         )
 #     })
-#   
 # })
+# 
 # summary_D_varwise <- results_D_varwise %>%
-#   group_by(realm, draw_id) %>%
-#   mutate(rel_importance = dropout_loss / sum(dropout_loss)) %>%
-#   ungroup() %>%
-#   group_by(realm, variable) %>%
-#   summarise(
-#     rel_imp_mean = mean(rel_importance),
-#     rel_imp_l95  = quantile(rel_importance, 0.025),
-#     rel_imp_u95  = quantile(rel_importance, 0.975),
+#   dplyr::group_by(realm, draw_id) %>%
+#   dplyr::mutate(rel_importance = delta_mse / sum(delta_mse, na.rm = TRUE)) %>%
+#   dplyr::ungroup() %>%
+#   dplyr::group_by(realm, variable) %>%
+#   dplyr::summarise(
+#     rel_imp_mean = mean(rel_importance, na.rm = TRUE),
+#     rel_imp_l95  = quantile(rel_importance, 0.025, na.rm = TRUE),
+#     rel_imp_u95  = quantile(rel_importance, 0.975, na.rm = TRUE),
 #     .groups      = "drop"
 #   ) %>%
-#   arrange(realm, desc(rel_imp_mean))
-# saveRDS(results_D_varwise,"output/tables/results_D_varwise.rds")
-# ------------------------------------------------------------------------------
-# 7. Group-wise importance (Biology / Geography / Environment / Access / Activity)
-# ------------------------------------------------------------------------------
-# > **Note:** The following code block is commented out by default due to its computational cost (~2 hours).  
-# > To reproduce the results, please **uncomment** the code.
+#   dplyr::arrange(realm, desc(rel_imp_mean))
+# 
+# saveRDS(results_D_varwise, "output/tables/results_D_varwise.rds")
 
+# ------------------------------------------------------------------------------
+# 9. Group-wise importance (Biology / Geography / Environment / Access / Activity)
+#    Reported as increase in mean squared error (ΔMSE)
+# ------------------------------------------------------------------------------
 
 # with_progress({
-#   p <- progressor(steps = nrow(job_grid_D)) 
+#   p <- progressor(steps = nrow(job_grid_D))
+#   
 #   results_D_groupwise <- job_grid_D %>%
 #     furrr::future_pmap_dfr(function(realm, draw_id) {
 #       p(message = paste("Realm:", realm, "| Draw:", draw_id))
@@ -205,10 +332,10 @@ plan(multisession, workers = 72L)
 #       
 #       if (is.null(dat_r) || nrow(dat_r) == 0) {
 #         return(tibble(
-#           realm        = character(0),
-#           draw_id      = integer(0),
-#           group        = character(0),
-#           dropout_loss = numeric(0)
+#           realm     = character(0),
+#           draw_id   = integer(0),
+#           group     = character(0),
+#           delta_mse = numeric(0)
 #         ))
 #       }
 #       
@@ -216,7 +343,6 @@ plan(multisession, workers = 72L)
 #       y_r <- dat_r$time
 #       
 #       pred_fun <- make_predict_fun_D_delay(
-#         fit     = fit_D,
 #         draw_id = draw_id
 #       )
 #       
@@ -231,7 +357,8 @@ plan(multisession, workers = 72L)
 #       
 #       mp_group <- DALEX::model_parts(
 #         explainer       = expl,
-#         type            = "variable_importance",
+#         loss_function   = mse_loss,
+#         type            = "difference",
 #         B               = 10,
 #         variable_groups = var_groups_D
 #       )
@@ -239,57 +366,51 @@ plan(multisession, workers = 72L)
 #       mp_group_df <- if ("result" %in% names(mp_group)) mp_group$result else mp_group
 #       
 #       mp_group_df %>%
-#         filter(variable %in% names(var_groups_D)) %>%
-#         transmute(
-#           realm        = realm,
-#           draw_id      = draw_id,
-#           group        = variable,
-#           dropout_loss = dropout_loss
+#         dplyr::filter(variable %in% names(var_groups_D)) %>%
+#         dplyr::transmute(
+#           realm     = realm,
+#           draw_id   = draw_id,
+#           group     = variable,
+#           delta_mse = dropout_loss
 #         )
 #     })
 # })
-# summary_D_groupwise <- results_D_groupwise %>%
-#   group_by(realm, draw_id) %>%
-#   mutate(rel_importance = dropout_loss / sum(dropout_loss)) %>%
-#   ungroup() %>%
-#   group_by(realm, group) %>%
-#   summarise(
-#     rel_imp_mean = mean(rel_importance),
-#     rel_imp_l95  = quantile(rel_importance, 0.025),
-#     rel_imp_u95  = quantile(rel_importance, 0.975),
-#     .groups      = "drop"
-#   ) %>%
-#   arrange(realm, desc(rel_imp_mean))
-# saveRDS(results_D_groupwise,"output/tables/results_D_groupwise.rds")
+# 
+# saveRDS(results_D_groupwise, "output/tables/results_D_groupwise.rds")
 # summary_D_varwise    # variable-level importance for sequence acquisition delay
 # summary_D_groupwise  # grouped importance
 
 ###########################################################################
 results_D_varwise <- readRDS("output/tables/results_D_varwise.rds")
 
-
-summary_D_varwise <- results_D_varwise %>%
-  filter(variable != "_baseline_") %>%
-  filter(variable != "biogeographic_realm") %>%
+final_D_importance <- results_D_varwise %>%
+  filter(!variable %in% c("_baseline_", "_full_model_", "biogeographic_realm")) %>%
+  group_by(realm, draw_id) %>%
+  mutate(
+    delta_pos = pmax(delta_mse, 0),
+    denom_pos = sum(delta_pos, na.rm = TRUE),
+    rel_imp_pos = if_else(denom_pos > 0, delta_pos / denom_pos, NA_real_)
+  ) %>%
+  ungroup() %>%
   group_by(realm, variable) %>%
-  mutate(
-    loss_median = median(dropout_loss),
-    loss_l95  = quantile(dropout_loss, 0.025),
-    loss_u95  = quantile(dropout_loss, 0.975),
-    .groups      = "drop"
+  summarise(
+    delta_mse_median   = median(delta_mse, na.rm = TRUE),
+    delta_mse_l95      = quantile(delta_mse, 0.025, na.rm = TRUE),
+    delta_mse_u95      = quantile(delta_mse, 0.975, na.rm = TRUE),
+    rel_imp_pos_median = median(rel_imp_pos, na.rm = TRUE),
+    rel_imp_pos_l95    = quantile(rel_imp_pos, 0.025, na.rm = TRUE),
+    rel_imp_pos_u95    = quantile(rel_imp_pos, 0.975, na.rm = TRUE),
+    p_negative         = mean(delta_mse < 0, na.rm = TRUE),
+    p_positive         = mean(delta_mse > 0, na.rm = TRUE),
+    sign_class = case_when(
+      delta_mse_l95 > 0 ~ "robust_positive",
+      delta_mse_u95 < 0 ~ "robust_negative",
+      TRUE              ~ "sign_uncertain"
+    ),
+    .groups = "drop"
   ) %>%
-  arrange(realm, desc(loss_median)) %>%
-  select(realm,variable,loss_median,loss_l95,loss_u95) %>%
-  distinct()
+  arrange(realm, desc(delta_mse_median))
 
-summary_D_varwise_rel <- summary_D_varwise %>%
-  group_by(realm) %>%
-  mutate(
-    rel_imp_median = loss_median / sum(loss_median, na.rm = TRUE),
-    rel_imp_l95  = loss_l95  / sum(loss_l95,  na.rm = TRUE),
-    rel_imp_u95  = loss_u95  / sum(loss_u95,  na.rm = TRUE)
-  ) %>%
-  ungroup()
 
 rename_map <- c(
   body_size            = "Body size",
@@ -302,7 +423,7 @@ rename_map <- c(
   watertemp            = "Water temperature",
   elevation            = "Elevation",
   population_density   = "Human density",
-  taxonmic_effort      = "Taxonomic effort",
+  taxonomic_effort     = "Taxonomic effort",
   taxonomic_activity   = "Taxonomic activity",
   sampling_effort      = "Sampling effort"
   #sequencing_effort    = "Sequencing effort"
@@ -310,7 +431,7 @@ rename_map <- c(
 
 
 
-summary_D_varwise_rel <- summary_D_varwise_rel %>%
+summary_D_varwise <- final_D_importance %>%
   mutate(
     realm     = recode(
       realm,
@@ -334,31 +455,37 @@ summary_D_varwise_rel <- summary_D_varwise_rel %>%
                                   "Environment","Geography","Biology")))
   ) %>% as.data.frame()
 
-summary_D_varwise_rel$realm <- factor(summary_D_varwise_rel$realm,levels = c( "Nearctic","Neotropic","Palearctic",
-                                                                              "Afrotropic","Indomalayan","Australasian","Oceanian"))
+summary_D_varwise$realm <- factor(summary_D_varwise$realm,levels = c( "Nearctic","Neotropic","Palearctic",
+                                                                      "Afrotropic","Indomalayan","Australasian","Oceanian"))
 
-p1 <- ggplot(summary_D_varwise_rel, aes(x = rel_imp_median, y = variable, fill = realm)) +
-  geom_col(alpha = 0.7, width = 0.6, position = position_dodge(0.6)) +
-  ggh4x::facet_grid2(  
+p1 <- ggplot(data = summary_D_varwise, aes(x = delta_mse_median, y = variable, colour = realm)) +
+  geom_vline(xintercept = 0, linetype = 2, colour = "grey50", linewidth = 0.4) +
+  geom_errorbarh(aes(xmin = delta_mse_l95, xmax = delta_mse_u95), width = 0.18, linewidth = 0.5, position = position_dodge(width = 0.6)) +
+  geom_point(size = 2.2,position = position_dodge(width = 0.6)) +
+  ggh4x::facet_grid2(
     group ~ .,
     scales = "free_y",
     space = "free",
     switch = "y",
     strip = strip_themed(
-      background_y = elem_list_rect( colour = NA,
-                                     fill = c(
-                                       Biology     = "#6C8F5D80",
-                                       Geography   = "#6D4D8080",
-                                       Environment = "#A3473E80",
-                                       Access      = "#4E6E8E80",
-                                       Activity    = "#8A6A3F80"
-                                     ) 
+      background_y = elem_list_rect(
+        colour = NA,
+        fill = c(
+          Biology     = "#6C8F5D80",
+          Geography   = "#6D4D8080",
+          Environment = "#A3473E80",
+          Access      = "#4E6E8E80",
+          Activity    = "#8A6A3F80"
+        )
       )
     )
   ) +
-  labs(y = "", x = "Variable-wise relative importance (%)") +
-  scale_fill_manual(
-    "Region",
+  labs(
+    y = "",
+    x = expression(Delta * MSE)
+  ) +
+  scale_colour_manual(
+    "Realm",
     values = c(
       "Afrotropic" = "#D55E00",
       "Australasian" = "#0072B2",
@@ -369,17 +496,18 @@ p1 <- ggplot(summary_D_varwise_rel, aes(x = rel_imp_median, y = variable, fill =
       "Palearctic" = "#CC79A7"
     )
   ) +
+  scale_x_continuous(expand = expansion(mult = c(0.02, 0.05)),limits = c(-1000,15000)) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0, 0)) +
   theme(
-    strip.background = element_blank(),  
+    strip.background = element_blank(),
     strip.placement = "outside",
-    legend.key.size = unit(0.5,"cm"),
+    legend.key.size = unit(0.5, "cm"),
     legend.title = element_text(face = "bold", size = 10),
     legend.text = element_text(size = 8),
     strip.text = element_text(face = "bold", size = 8),
     axis.title = element_text(face = "bold", size = 10),
-    axis.text = element_text(colour = "black", size = 8)
+    axis.text = element_text(colour = "black", size = 8),
+    panel.grid.minor = element_blank()
   )
 
 world <- ne_countries(scale = "small", returnclass = "sf") %>%
@@ -418,39 +546,65 @@ map <- ggplot() +
   theme(plot.background = element_blank())
 
 p11 <- ggdraw(p1)+
-  draw_plot(map,x = 0.15, y = 0.01, scale = 0.3)
-
+  draw_plot(map,x = 0.2, y = 0.4, scale = 0.3)
 
 results_D_groupwise <- readRDS("output/tables/results_D_groupwise.rds")
+results_D_groupwise <- results_D_groupwise %>% mutate(realm = recode(
+  realm,
+  "Australasia" = "Australasian",
+  "Oceania"     = "Oceanian"
+))
 
-summary_D_groupwise <- results_D_groupwise %>%
-  group_by(realm, group) %>%
-  mutate(
-    loss_median = median(dropout_loss),
-    loss_l95  = quantile(dropout_loss, 0.025),
-    loss_u95  = quantile(dropout_loss, 0.975),
-    .groups      = "drop"
-  ) %>%
-  arrange(realm, desc(loss_median)) %>%
-  select(realm,group,loss_median) %>%
-  distinct()
+results_D_groupwise_clean <- results_D_groupwise %>%
+  group_by(realm, draw_id, group) %>%
+  summarise(
+    delta_mse = sum(delta_mse, na.rm = TRUE),
+    .groups = "drop"
+  )
 
-summary_D_groupwise_rel <- summary_D_groupwise %>%
-  group_by(realm) %>%
+groupwise_draw_rel <- results_D_groupwise_clean %>%
+  group_by(realm, draw_id) %>%
   mutate(
-    rel_imp_median = loss_median / sum(loss_median, na.rm = TRUE)
+    delta_pos = pmax(delta_mse, 0),
+    denom_pos = sum(delta_pos, na.rm = TRUE),
+    rel_imp = if_else(denom_pos > 0, delta_pos / denom_pos, NA_real_)
   ) %>%
   ungroup()
+
+summary_D_groupwise_rel <- groupwise_draw_rel %>%
+  group_by(realm, group) %>%
+  summarise(
+    rel_imp_median = median(rel_imp, na.rm = TRUE),
+    rel_imp_l95    = quantile(rel_imp, 0.025, na.rm = TRUE),
+    rel_imp_u95    = quantile(rel_imp, 0.975, na.rm = TRUE),
+    delta_mse_median = median(delta_mse, na.rm = TRUE),
+    p_negative = mean(delta_mse < 0, na.rm = TRUE),
+    .groups = "drop"
+  )
 
 global <- summary_D_groupwise_rel %>%
   group_by(group) %>%
   summarise(
-    rel_imp_median = mean(rel_imp_median),
-    loss_median = mean(loss_median),
+    rel_imp_median = mean(rel_imp_median, na.rm = TRUE),
+    rel_imp_l95    = mean(rel_imp_l95, na.rm = TRUE),
+    rel_imp_u95    = mean(rel_imp_u95, na.rm = TRUE),
+    delta_mse_median = mean(delta_mse_median, na.rm = TRUE),
+    p_negative = mean(p_negative, na.rm = TRUE),
+    .groups = "drop"
   ) %>%
   mutate(realm = "Global")
 
-dt <-  dplyr::bind_rows(summary_D_groupwise_rel,global)
+dt <- bind_rows(summary_D_groupwise_rel, global) %>%
+  mutate(
+    rel_imp_pct = rel_imp_median * 100
+  )
+
+dt <- dt %>%
+  group_by(realm) %>%
+  mutate(
+    rel_imp_pct = 100 * rel_imp_pct / sum(rel_imp_pct, na.rm = TRUE)
+  ) %>%
+  ungroup()
 
 group_colors <- c(
   Biology     = "#6C8F5D80",
@@ -460,30 +614,50 @@ group_colors <- c(
   Activity    = "#8A6A3F80"
 )
 
-dt <- dt %>% mutate(realm     = recode(
-  realm,
-  "Australasia" = "Australasian",
-  "Oceania"     = "Oceanian"
-))
-
 
 dt$realm <- factor(dt$realm,levels = c( "Nearctic","Neotropic","Palearctic",
                                         "Afrotropic","Indomalayan","Australasian","Oceanian","Global"))
 
-p2 <- ggplot(dt, aes(x = "", y = rel_imp_median, fill = group, group = group)) +
-  geom_bar(width = 1, stat = "identity", color = "white", linewidth = 0.5,
-           alpha = 0.8, show.legend = F) +
-  coord_polar(theta = "y",start=0) + 
-  scale_fill_manual("Group",values = group_colors)+
-  facet_grid(.~ realm)+
-  theme_minimal()+
-  labs(y= "Group-wise relative Importance (%)", x= "")+
-  theme(axis.text = element_blank(),
-        panel.grid = element_blank(),
-        plot.margin = margin(0,0,0,0),
-        legend.position = "left",
-        strip.text = element_text(size = 9),
-        axis.title = element_text(face = "bold", size = 10))
+
+dt_plot <- dt %>%
+  mutate(
+    group = factor(
+      group,
+      levels = c("Biology", "Geography", "Environment", "Access", "Activity")
+    ),
+    label = ifelse(rel_imp_pct >= 5, paste0(round(rel_imp_pct), "%"), "")
+  )
+
+p2 <- ggplot(dt_plot, aes(x = 1, y = rel_imp_pct, fill = group)) +
+  geom_col(
+    width = 1,
+    color = "white",
+    linewidth = 0.5,
+    alpha = 0.85,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 2.2,
+    color = "black"
+  ) +
+  coord_polar(theta = "y", start = 0) +
+  scale_fill_manual(values = group_colors) +
+  facet_grid(. ~ realm) +
+  labs(
+    x = NULL,
+    y = "Group-wise relative importance (%)"
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "left",
+    plot.margin = margin(0, 0, 0, 0),
+    strip.text = element_text(size = 9),
+    axis.title = element_text(face = "bold", size = 10)
+  )
+
+
 plot_grid(
   p11,
   p2,

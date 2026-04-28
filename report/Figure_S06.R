@@ -24,9 +24,9 @@ packageVersion("progressr")
 #    time  = species discovery delay (e.g. year_description - 1758)
 #    event = 1 for described species, 0 for still-undescribed (censored)
 # ------------------------------------------------------------------------------
-
-fit_L <- readRDS("output/model/country_linnaean_all.rds")$weibull
-dat_L <- fit_L$data   # or readRDS("output/stan_survdata_basin_linnaean.rds") if you prefer
+source("code/functions/gompertz_family.R")
+fit_L <- readRDS("output/model/country_linnaean_gompertz_full.rds")
+dat_L <- fit_L$data   
 
 continent <- levels(dat_L$continent)
 
@@ -39,10 +39,9 @@ draw_ids <- sample(
 # ------------------------------------------------------------------------------
 # 2. Predictor set and variable groups (Linnaean version)
 # ------------------------------------------------------------------------------
-
 predictors_L <- c(
   "body_size",
-  "taxonmic_effort",
+  "taxonomic_effort",
   "taxonomic_activity",
   "country_area",
   "range_size",
@@ -63,24 +62,114 @@ var_groups_L <- list(
   Geography   = c("range_size", "range_rarity", "latitude", "country_area"),
   Environment = c("discharge", "watertemp"),
   Access      = c("elevation", "population_density"),
-  Activity    = c("taxonmic_effort", "taxonomic_activity",
+  Activity    = c("taxonomic_effort", "taxonomic_activity",
                   "sampling_effort", "sequencing_effort")
 )
 
 
 # ------------------------------------------------------------------------------
-# 3.Posterior-draw-specific prediction for expected discovery delay
-# Weibull in brms (default parameterization):
-#   mu    = scale, link usually log
-#   shape = shape, link usually log
+# 3. Posterior-draw-specific prediction for expected discovery delay
+#    Gompertz parameterisation in brms:
+#      mu    = rate parameter, link usually log
+#      gamma = shape parameter, link usually identity
+#
+#    Survival function:
+#      S(t) = exp(-(mu / gamma) * (exp(gamma * t) - 1)),  gamma != 0
+#      S(t) = exp(-mu * t),                               gamma -> 0
+#
+#    Expected delay:
+#      E[T] = integral_0^Inf S(t) dt
 # ------------------------------------------------------------------------------
+
+gompertz_surv <- function(t, mu, gamma, eps = 1e-8) {
+  out <- numeric(length(t))
+  near0 <- abs(gamma) < eps
+  
+  # Exponential limit when gamma is close to zero
+  if (any(near0)) {
+    out[near0] <- exp(-mu[near0] * t[near0])
+  }
+  
+  if (any(!near0)) {
+    g  <- gamma[!near0]
+    m  <- mu[!near0]
+    tt <- t[!near0]
+    out[!near0] <- exp(-(m / g) * (exp(g * tt) - 1))
+  }
+  
+  out
+}
+
+gompertz_mean <- function(mu, gamma, eps = 1e-8,
+                          rel.tol = 1e-8,
+                          subdivisions = 1000L,
+                          tail_tol = 1e-10,
+                          max_upper = 1e6) {
+  stopifnot(length(mu) == length(gamma))
+  
+  out <- rep(NA_real_, length(mu))
+  
+  for (i in seq_along(mu)) {
+    m <- mu[i]
+    g <- gamma[i]
+    
+    # Basic validity checks
+    if (!is.finite(m) || !is.finite(g) || m <= 0) {
+      out[i] <- NA_real_
+      next
+    }
+    
+    # If gamma < 0, the Gompertz survival does not go to 0 as t -> Inf
+    # under this parameterisation, so the mean is not finite.
+    if (g < -eps) {
+      out[i] <- Inf
+      next
+    }
+    
+    # Exponential limit
+    if (abs(g) < eps) {
+      out[i] <- 1 / m
+      next
+    }
+    
+    # For gamma > 0, numerically integrate the survival function
+    surv_i <- function(t) {
+      exp(-(m / g) * (exp(g * t) - 1))
+    }
+    
+    # Find an upper bound where survival becomes negligible
+    upper <- 1
+    while (upper < max_upper && surv_i(upper) > tail_tol) {
+      upper <- upper * 2
+    }
+    
+    integ <- try(
+      stats::integrate(
+        surv_i,
+        lower = 0,
+        upper = upper,
+        rel.tol = rel.tol,
+        subdivisions = subdivisions
+      ),
+      silent = TRUE
+    )
+    
+    if (inherits(integ, "try-error")) {
+      out[i] <- NA_real_
+    } else {
+      out[i] <- integ$value
+    }
+  }
+  
+  out
+}
 
 predict_L_delay_single_draw <- function(fit,
                                         newdata,
                                         draw_id,
                                         re_formula = NA) {
   
-  # linear predictor for mu (scale)
+  # Linear predictor for mu
   eta_mu <- posterior_linpred(
     fit,
     newdata    = newdata,
@@ -91,32 +180,35 @@ predict_L_delay_single_draw <- function(fit,
   )
   eta_mu <- as.numeric(eta_mu)
   
-  # linear predictor for shape
-  eta_shape <- posterior_linpred(
+  # Linear predictor for gamma
+  eta_gamma <- posterior_linpred(
     fit,
     newdata    = newdata,
-    dpar       = "shape",
+    dpar       = "gamma",
     draw_ids   = draw_id,
     re_formula = re_formula,
     transform  = FALSE
   )
-  eta_shape <- as.numeric(eta_shape)
+  eta_gamma <- as.numeric(eta_gamma)
   
-  # inverse links (assume log-links, which is brms default for weibull dpars)
+  # Inverse links:
+  # mu uses log link in brms Gompertz
+  # gamma usually uses identity link
   mu    <- exp(eta_mu)
-  shape <- exp(eta_shape)
+  gamma <- eta_gamma
   
-  # expected value for Weibull(scale=mu, shape=shape)
-  mean_delay <- mu * gamma(1 + 1 / shape)
+  # Expected value for Gompertz
+  mean_delay <- gompertz_mean(mu = mu, gamma = gamma)
   
   as.numeric(mean_delay)
 }
 
-make_predict_fun_L_delay <- function(fit, draw_id) {
-  force(fit); force(draw_id)
+# Use the model passed by DALEX, rather than capturing fit_L in the closure
+make_predict_fun_L_delay <- function(draw_id) {
+  force(draw_id)
   function(model, newdata) {
     predict_L_delay_single_draw(
-      fit        = fit,
+      fit        = model,
       newdata    = newdata,
       draw_id    = draw_id,
       re_formula = NA
@@ -124,17 +216,16 @@ make_predict_fun_L_delay <- function(fit, draw_id) {
   }
 }
 
-
 # ------------------------------------------------------------------------------
-# 4. Pre-split data by continent (use only species with observed discovery times)
+# 4. Pre-split data by continent
 # ------------------------------------------------------------------------------
 
 dat_L_by_continent <- dat_L %>%
   split(.$continent)
 
 job_grid_L <- tidyr::expand_grid(
-  continent   = continent,
-  draw_id = draw_ids
+  continent = continent,
+  draw_id   = draw_ids
 )
 
 # ------------------------------------------------------------------------------
@@ -144,13 +235,24 @@ job_grid_L <- tidyr::expand_grid(
 plan(multisession, workers = 60L)
 
 # ------------------------------------------------------------------------------
-# 6. Variable-wise importance for discovery delay
+# 5a. MSE loss function
 # ------------------------------------------------------------------------------
-# > **Note:** The following code block is commented out by default due to its computational cost (~2 hours).  
-# > To reproduce the results, please **uncomment** the code.
+
+mse_loss <- function(observed, predicted) {
+  ok <- is.finite(observed) & is.finite(predicted)
+  if (!any(ok)) return(NA_real_)
+  mean((observed[ok] - predicted[ok])^2)
+}
+attr(mse_loss, "loss_name") <- "MSE"
+
+# ------------------------------------------------------------------------------
+# 6. Variable-wise importance for discovery delay
+#    Reported as increase in mean squared error (ΔMSE)
+# ------------------------------------------------------------------------------
 
 # with_progress({
 #   p <- progressor(steps = nrow(job_grid_L))
+#   
 #   results_L_varwise <- job_grid_L %>%
 #     furrr::future_pmap_dfr(function(continent, draw_id) {
 #       p(message = paste("continent:", continent, "| Draw:", draw_id))
@@ -158,10 +260,10 @@ plan(multisession, workers = 60L)
 #       
 #       if (is.null(dat_r) || nrow(dat_r) == 0) {
 #         return(tibble(
-#           continent        = character(0),
-#           draw_id      = integer(0),
-#           variable     = character(0),
-#           dropout_loss = numeric(0)
+#           continent = character(0),
+#           draw_id   = integer(0),
+#           variable  = character(0),
+#           delta_mse = numeric(0)
 #         ))
 #       }
 #       
@@ -169,7 +271,6 @@ plan(multisession, workers = 60L)
 #       y_r <- dat_r$time   # observed species discovery delay
 #       
 #       pred_fun <- make_predict_fun_L_delay(
-#         fit     = fit_L,
 #         draw_id = draw_id
 #       )
 #       
@@ -183,33 +284,36 @@ plan(multisession, workers = 60L)
 #       )
 #       
 #       mp <- DALEX::model_parts(
-#         explainer = expl,
-#         type      = "variable_importance",
-#         B         = 10
+#         explainer     = expl,
+#         loss_function = mse_loss,
+#         type          = "difference",
+#         B             = 10
 #       )
 #       
 #       mp_df <- if ("result" %in% names(mp)) mp$result else mp
 #       
 #       mp_df %>%
 #         dplyr::filter(variable != "_full_model_") %>%
-#         transmute(
-#           continent        = continent,
-#           draw_id      = draw_id,
-#           variable     = variable,
-#           dropout_loss = dropout_loss
+#         dplyr::transmute(
+#           continent = continent,
+#           draw_id   = draw_id,
+#           variable  = variable,
+#           delta_mse = dropout_loss
 #         )
 #     })
 # })
-# saveRDS(results_L_varwise,"output/tables/results_L_varwise_country.rds")
+# 
+# saveRDS(results_L_varwise, "output/tables/results_L_varwise_country.rds")
+
 # ------------------------------------------------------------------------------
 # 7. Group-wise importance (Biology / Geography / Environment / Access / Activity)
+#    Reported as increase in mean squared error (ΔMSE)
 # ------------------------------------------------------------------------------
-# > **Note:** The following code block is commented out by default due to its computational cost (~2 hours).  
-# > To reproduce the results, please **uncomment** the code.
 
 # with_progress({
 #   
 #   p <- progressor(steps = nrow(job_grid_L))
+#   
 #   results_L_groupwise <- job_grid_L %>%
 #     furrr::future_pmap_dfr(function(continent, draw_id) {
 #       p(message = paste("continent:", continent, "| Draw:", draw_id))
@@ -217,10 +321,10 @@ plan(multisession, workers = 60L)
 #       
 #       if (is.null(dat_r) || nrow(dat_r) == 0) {
 #         return(tibble(
-#           continent        = character(0),
-#           draw_id      = integer(0),
-#           group        = character(0),
-#           dropout_loss = numeric(0)
+#           continent = character(0),
+#           draw_id   = integer(0),
+#           group     = character(0),
+#           delta_mse = numeric(0)
 #         ))
 #       }
 #       
@@ -228,7 +332,6 @@ plan(multisession, workers = 60L)
 #       y_r <- dat_r$time
 #       
 #       pred_fun <- make_predict_fun_L_delay(
-#         fit     = fit_L,
 #         draw_id = draw_id
 #       )
 #       
@@ -243,7 +346,8 @@ plan(multisession, workers = 60L)
 #       
 #       mp_group <- DALEX::model_parts(
 #         explainer       = expl,
-#         type            = "variable_importance",
+#         loss_function   = mse_loss,
+#         type            = "difference",
 #         B               = 10,
 #         variable_groups = var_groups_L
 #       )
@@ -251,45 +355,50 @@ plan(multisession, workers = 60L)
 #       mp_group_df <- if ("result" %in% names(mp_group)) mp_group$result else mp_group
 #       
 #       mp_group_df %>%
-#         filter(variable %in% names(var_groups_L)) %>%
-#         transmute(
-#           continent        = continent,
-#           draw_id      = draw_id,
-#           group        = variable,
-#           dropout_loss = dropout_loss
+#         dplyr::filter(variable %in% names(var_groups_L)) %>%
+#         dplyr::transmute(
+#           continent = continent,
+#           draw_id   = draw_id,
+#           group     = variable,
+#           delta_mse = dropout_loss
 #         )
 #     })
 # })
 # 
-# saveRDS(results_L_groupwise,"output/tables/results_L_groupwise_country.rds")
+# saveRDS(results_L_groupwise, "output/tables/results_L_groupwise_country.rds")
 # summary_L_varwise    # variable-level importance for discovery delay
 # summary_L_groupwise  # grouped importance
 
 ################################################################################
 results_L_varwise <- readRDS("output/tables/results_L_varwise_country.rds")
 
-summary_L_varwise <- results_L_varwise %>%
-  filter(variable != "_baseline_") %>%
-  filter(variable != "continent") %>%
+final_L_importance <- results_L_varwise %>%
+  filter(!variable %in% c("_baseline_", "_full_model_", "continent")) %>%
+  group_by(continent, draw_id) %>%
+  mutate(
+    delta_pos = pmax(delta_mse, 0),
+    denom_pos = sum(delta_pos, na.rm = TRUE),
+    rel_imp_pos = if_else(denom_pos > 0, delta_pos / denom_pos, NA_real_)
+  ) %>%
+  ungroup() %>%
   group_by(continent, variable) %>%
-  mutate(
-    loss_median = median(dropout_loss),
-    loss_l95  = quantile(dropout_loss, 0.025),
-    loss_u95  = quantile(dropout_loss, 0.975),
-    .groups      = "drop"
+  summarise(
+    delta_mse_median   = median(delta_mse, na.rm = TRUE),
+    delta_mse_l95      = quantile(delta_mse, 0.025, na.rm = TRUE),
+    delta_mse_u95      = quantile(delta_mse, 0.975, na.rm = TRUE),
+    rel_imp_pos_median = median(rel_imp_pos, na.rm = TRUE),
+    rel_imp_pos_l95    = quantile(rel_imp_pos, 0.025, na.rm = TRUE),
+    rel_imp_pos_u95    = quantile(rel_imp_pos, 0.975, na.rm = TRUE),
+    p_negative         = mean(delta_mse < 0, na.rm = TRUE),
+    p_positive         = mean(delta_mse > 0, na.rm = TRUE),
+    sign_class = case_when(
+      delta_mse_l95 > 0 ~ "robust_positive",
+      delta_mse_u95 < 0 ~ "robust_negative",
+      TRUE              ~ "sign_uncertain"
+    ),
+    .groups = "drop"
   ) %>%
-  arrange(continent, desc(loss_median)) %>%
-  select(continent,variable,loss_median,loss_l95,loss_u95) %>%
-  distinct()
-
-summary_L_varwise_rel <- summary_L_varwise %>%
-  group_by(continent) %>%
-  mutate(
-    rel_imp_median = loss_median / sum(loss_median, na.rm = TRUE),
-    rel_imp_l95  = loss_l95  / sum(loss_l95,  na.rm = TRUE),
-    rel_imp_u95  = loss_u95  / sum(loss_u95,  na.rm = TRUE)
-  ) %>%
-  ungroup()
+  arrange(continent, desc(delta_mse_median))
 
 rename_map <- c(
   body_size            = "Body size",
@@ -302,7 +411,7 @@ rename_map <- c(
   watertemp            = "Water temperature",
   elevation            = "Elevation",
   population_density   = "Human density",
-  taxonmic_effort      = "Taxonomic effort",
+  taxonomic_effort     = "Taxonomic effort",
   taxonomic_activity   = "Taxonomic activity",
   sampling_effort      = "Sampling effort",
   sequencing_effort    = "Sequencing effort"
@@ -310,7 +419,7 @@ rename_map <- c(
 
 
 
-summary_L_varwise_rel <- summary_L_varwise_rel %>%
+summary_L_varwise <- final_L_importance %>%
   mutate(
     variable = recode(variable, !!!rename_map),
     variable = factor(variable, levels = rev(unname(rename_map))),
@@ -329,55 +438,63 @@ summary_L_varwise_rel <- summary_L_varwise_rel %>%
                                   "Environment","Geography","Biology")))
   ) %>% as.data.frame()
 
-summary_L_varwise_rel$continent <- factor(summary_L_varwise_rel$continent,levels = c( "North America",
-                                                                                      "South America",
-                                                                                      "Europe",
-                                                                                      "Africa",
-                                                                                      "Asia",
-                                                                                      "Oceania"))
+summary_L_varwise$continent <- factor(summary_L_varwise$continent,levels = c( "North America",
+                                                                              "South America",
+                                                                              "Europe",
+                                                                              "Africa",
+                                                                              "Asia",
+                                                                              "Oceania"))
 
-p1 <- ggplot(summary_L_varwise_rel, aes(x = rel_imp_median, y = variable, fill = continent)) +
-  geom_col(alpha = 0.7, width = 0.6, position = position_dodge(0.6)) +
-  ggh4x::facet_grid2(  
+
+p1 <- ggplot(data = summary_L_varwise, aes(x = delta_mse_median, y = variable, colour = continent)) +
+  geom_vline(xintercept = 0, linetype = 2, colour = "grey50", linewidth = 0.4) +
+  geom_errorbarh(aes(xmin = delta_mse_l95, xmax = delta_mse_u95), width = 0.18, linewidth = 0.5, position = position_dodge(width = 0.6)) +
+  geom_point(size = 2.2,position = position_dodge(width = 0.6)) +
+  ggh4x::facet_grid2(
     group ~ .,
     scales = "free_y",
     space = "free",
     switch = "y",
     strip = strip_themed(
-      background_y = elem_list_rect( colour = NA,
-                                     fill = c(
-                                       Biology     = "#6C8F5D80",
-                                       Geography   = "#6D4D8080",
-                                       Environment = "#A3473E80",
-                                       Access      = "#4E6E8E80",
-                                       Activity    = "#8A6A3F80"
-                                     ) 
+      background_y = elem_list_rect(
+        colour = NA,
+        fill = c(
+          Biology     = "#6C8F5D80",
+          Geography   = "#6D4D8080",
+          Environment = "#A3473E80",
+          Access      = "#4E6E8E80",
+          Activity    = "#8A6A3F80"
+        )
       )
     )
   ) +
-  labs(y = "", x = "Variable-wise relative importance (%)") +
-  scale_fill_manual(
-    "Region",
+  labs(
+    y = "",
+    x = expression(Delta * MSE)
+  ) +
+  scale_colour_manual(
+    "Continent",
     values = c(
-      "Africa"   = "#D55E00",
-      "Oceania" = "#0072B2",
-      "Asia"  = "#009E73",
-      "North America"     = "#F0E442",
-      "South America"    = "#E69F00",
-      "Europe"   = "#CC79A7"
+      "Africa"        = "#D55E00",
+      "Oceania"       = "#0072B2",
+      "Asia"          = "#009E73",
+      "North America" = "#F0E442",
+      "South America" = "#E69F00",
+      "Europe"        = "#CC79A7"
     )
   ) +
+  scale_x_continuous(expand = expansion(mult = c(0.02, 0.05))) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0, 0)) +
   theme(
-    strip.background = element_blank(),  
+    strip.background = element_blank(),
     strip.placement = "outside",
-    legend.key.size = unit(0.5,"cm"),
+    legend.key.size = unit(0.5, "cm"),
     legend.title = element_text(face = "bold", size = 10),
     legend.text = element_text(size = 8),
     strip.text = element_text(face = "bold", size = 8),
     axis.title = element_text(face = "bold", size = 10),
-    axis.text = element_text(colour = "black", size = 8)
+    axis.text = element_text(colour = "black", size = 8),
+    panel.grid.minor = element_blank()
   )
 
 world <- ne_countries(scale = "small", returnclass = "sf") %>%
@@ -409,39 +526,61 @@ map <- ggplot() +
   theme(plot.background = element_blank())
 
 p11 <- ggdraw(p1)+
-  draw_plot(map,x = 0.15, y = 0.01, scale = 0.3)
+  draw_plot(map,x = 0.2, y = 0.4, scale = 0.3)
 
 
 results_L_groupwise <- readRDS("output/tables/results_L_groupwise_country.rds")
 
-summary_L_groupwise <- results_L_groupwise %>%
-  group_by(continent, group) %>%
-  mutate(
-    loss_median = median(dropout_loss),
-    loss_l95  = quantile(dropout_loss, 0.025),
-    loss_u95  = quantile(dropout_loss, 0.975),
-    .groups      = "drop"
-  ) %>%
-  arrange(continent, desc(loss_median)) %>%
-  select(continent,group,loss_median) %>%
-  distinct()
+results_L_groupwise_clean <- results_L_groupwise %>%
+  group_by(continent, draw_id, group) %>%
+  summarise(
+    delta_mse = sum(delta_mse, na.rm = TRUE),
+    .groups = "drop"
+  )
 
-summary_L_groupwise_rel <- summary_L_groupwise %>%
-  group_by(continent) %>%
+groupwise_draw_rel <- results_L_groupwise_clean %>%
+  group_by(continent, draw_id) %>%
   mutate(
-    rel_imp_median = loss_median / sum(loss_median, na.rm = TRUE)
+    delta_pos = pmax(delta_mse, 0),
+    denom_pos = sum(delta_pos, na.rm = TRUE),
+    rel_imp = if_else(denom_pos > 0, delta_pos / denom_pos, NA_real_)
   ) %>%
   ungroup()
+
+summary_L_groupwise_rel <- groupwise_draw_rel %>%
+  group_by(continent, group) %>%
+  summarise(
+    rel_imp_median = median(rel_imp, na.rm = TRUE),
+    rel_imp_l95    = quantile(rel_imp, 0.025, na.rm = TRUE),
+    rel_imp_u95    = quantile(rel_imp, 0.975, na.rm = TRUE),
+    delta_mse_median = median(delta_mse, na.rm = TRUE),
+    p_negative = mean(delta_mse < 0, na.rm = TRUE),
+    .groups = "drop"
+  )
 
 global <- summary_L_groupwise_rel %>%
   group_by(group) %>%
   summarise(
-    rel_imp_median = mean(rel_imp_median),
-    loss_median = mean(loss_median),
+    rel_imp_median = mean(rel_imp_median, na.rm = TRUE),
+    rel_imp_l95    = mean(rel_imp_l95, na.rm = TRUE),
+    rel_imp_u95    = mean(rel_imp_u95, na.rm = TRUE),
+    delta_mse_median = mean(delta_mse_median, na.rm = TRUE),
+    p_negative = mean(p_negative, na.rm = TRUE),
+    .groups = "drop"
   ) %>%
   mutate(continent = "Global")
 
-dt <-  dplyr::bind_rows(summary_L_groupwise_rel,global)
+dt <- bind_rows(summary_L_groupwise_rel, global) %>%
+  mutate(
+    rel_imp_pct = rel_imp_median * 100
+  )
+
+dt <- dt %>%
+  group_by(continent) %>%
+  mutate(
+    rel_imp_pct = 100 * rel_imp_pct / sum(rel_imp_pct, na.rm = TRUE)
+  ) %>%
+  ungroup()
 
 group_colors <- c(
   Biology     = "#6C8F5D80",
@@ -459,20 +598,44 @@ dt$continent <- factor(dt$continent,levels = c( "North America",
                                                 "Asia",
                                                 "Oceania","Global"))
 
-p2 <- ggplot(dt, aes(x = "", y = rel_imp_median, fill = group, group = group)) +
-  geom_bar(width = 1, stat = "identity", color = "white", linewidth = 0.5,
-           alpha = 0.8, show.legend = F) +
-  coord_polar(theta = "y",start=0) + 
-  scale_fill_manual("Group",values = group_colors)+
-  facet_grid(.~ continent)+
-  theme_minimal()+
-  labs(y= "Group-wise relative Importance (%)", x= "")+
-  theme(axis.text = element_blank(),
-        panel.grid = element_blank(),
-        plot.margin = margin(0,0,0,0),
-        legend.position = "left",
-        strip.text = element_text(size = 9),
-        axis.title = element_text(face = "bold", size = 10))
+dt_plot <- dt %>%
+  mutate(
+    group = factor(
+      group,
+      levels = c("Biology", "Geography", "Environment", "Access", "Activity")
+    ),
+    label = ifelse(rel_imp_pct >= 5, paste0(round(rel_imp_pct), "%"), "")
+  )
+
+p2 <- ggplot(dt_plot, aes(x = 1, y = rel_imp_pct, fill = group)) +
+  geom_col(
+    width = 1,
+    color = "white",
+    linewidth = 0.5,
+    alpha = 0.85,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 2.2,
+    color = "black"
+  ) +
+  coord_polar(theta = "y", start = 0) +
+  scale_fill_manual(values = group_colors) +
+  facet_grid(. ~ continent) +
+  labs(
+    x = NULL,
+    y = "Group-wise relative importance (%)"
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "left",
+    plot.margin = margin(0, 0, 0, 0),
+    strip.text = element_text(size = 9),
+    axis.title = element_text(face = "bold", size = 10)
+  )
+
 plot_grid(
   p11,
   p2,

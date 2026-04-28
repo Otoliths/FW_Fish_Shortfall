@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------------------
 # Supplementary Figure S3
-# Standardized effects of predictors on species documentation processes in freshwater fishes across continents
+# Effects of predictors on species documentation processes in global freshwater fishes across continents
 
 rm(list = ls())
 
@@ -9,9 +9,8 @@ library(dplyr)
 library(purrr)
 library(tidybayes)
 library(ggplot2)
-library(ggh4x)
+library(legendry)
 library(ggtext)
-library(legendry) # This replaces ggh4x for nested guides
 library(sf)
 library(ggplot2)
 library(rnaturalearth) 
@@ -21,99 +20,181 @@ library(patchwork)
 options(sf_use_s2 = F)
 options(warn = -1)
 
-compute_continent_slopes <- function(v, draws, cont_levels, baseline_continent = "Africa") {
-  # Name of the main-effect coefficient for predictor v
-  base_name <- paste0("b_", v)
+# ---- helper: validate family and transform beta to HR ----
+.beta_to_hr <- function(beta,
+                        draws,
+                        family = c("weibull", "gompertz"),
+                        shape_col = "shape") {
+  family <- match.arg(family)
   
-  if (!base_name %in% names(draws)) {
-    stop("No coefficient found for ", base_name)
-  }
-  
-  # Baseline slope β_v (effect in the reference continent)
-  base <- draws[[base_name]]
-  
-  # Keep .draw (and optionally .chain, .iteration) to preserve posterior structure
-  meta_cols <- draws %>% dplyr::select(.chain, .iteration, .draw)
-  
-  # For each continent, construct the posterior slope
-  out <- map_dfr(cont_levels, function(ct) {
-    if (ct == baseline_continent) {
-      # Baseline continent: slope = β_v
-      slope <- base
-    } else {
-      # Non-baseline continent: slope = β_v + β_v:continent=ct
-      inter_name <- paste0("b_", v, ":continent", ct)
-      if (inter_name %in% names(draws)) {
-        slope <- base + draws[[inter_name]]
-      } else {
-        # Safety fallback: no interaction term found (should not occur given your formula)
-        slope <- base
-      }
+  if (family == "gompertz") {
+    log_hr <- beta
+  } else if (family == "weibull") {
+    if (!shape_col %in% names(draws)) {
+      stop("No Weibull shape column found: ", shape_col)
     }
-    
-    tibble(
-      continent = ct,
-      slope     = slope
-    )
-  })
-  
-  # Bind back posterior meta info and add variable name
-  bind_cols(
-    meta_cols[rep(1:nrow(meta_cols), times = length(cont_levels)), ],
-    out
-  ) %>%
-    mutate(variable = v)
-}
-
-
-# The global marginal slope for predictor $x$ is computed as
-# $$
-#   \beta_x^{\text{global}} 
-# = \beta_x 
-# + \sum_{c \ne \text{Africa}} w_c \,\beta_{x:\text{continent}=c},
-# $$
-#   where $w_c$ denotes the proportion of observations from continent $c$.
-
-compute_global_slope <- function(v, draws, w, cont_levels, baseline_continent = "Africa") {
-  # Construct the main-effect coefficient name for variable v
-  base_name <- paste0("b_", v)
-  
-  # Ensure that the baseline coefficient exists in the posterior draws
-  if (!base_name %in% names(draws)) {
-    stop("No coefficient found for ", base_name)
+    shape  <- draws[[shape_col]]
+    log_hr <- -shape * beta
   }
   
-  # Extract the baseline slope β_v (i.e., effect in the reference continent)
-  base <- draws[[base_name]]
-  
-  # Initialize the global slope with the baseline effect
-  slope <- base
-  
-  # Add weighted interaction terms for all non-baseline continent
-  for (ct in cont_levels[cont_levels != baseline_continent]) {
-    inter_name <- paste0("b_", v, ":continent", ct)
-    if (inter_name %in% names(draws)) {
-      # Weighted contribution from continent-specific deviation
-      slope <- slope + as.numeric(w[ct]) * draws[[inter_name]]
-    } else {
-      # Fallback: if no interaction term exists (should not happen in this model)
-      slope <- slope + 0
-    }
-  }
-  
-  # Return a tibble containing variable name and posterior samples of the global slope
-  tibble(
-    variable = v,
-    slope    = slope
+  list(
+    log_hr = log_hr,
+    hr     = exp(log_hr)
   )
 }
 
-################################################################################
-fit <- readRDS("output/model/country_linnaean_all.rds")$weibull 
-# bayes_R2(fit)
-# Estimate    Est.Error      Q2.5    Q97.5
-# 0.8476622 0.00127659 0.8448291 0.8497559
+# ---- helper: construct continent-specific beta ----
+.compute_continent_beta <- function(v,
+                                    draws,
+                                    cont_levels,
+                                    baseline_continent = "Africa",
+                                    continent_var = "continent") {
+  base_name <- paste0("b_", v)
+  
+  if (!base_name %in% names(draws)) {
+    stop("No coefficient found for ", base_name)
+  }
+  
+  base <- draws[[base_name]]
+  
+  purrr::map_dfr(cont_levels, function(ct) {
+    if (ct == baseline_continent) {
+      beta <- base
+    } else {
+      inter_name <- paste0("b_", v, ":", continent_var, ct)
+      
+      # fallback: try reversed interaction naming if needed
+      inter_name_alt <- paste0("b_", continent_var, ct, ":", v)
+      
+      if (inter_name %in% names(draws)) {
+        beta <- base + draws[[inter_name]]
+      } else if (inter_name_alt %in% names(draws)) {
+        beta <- base + draws[[inter_name_alt]]
+      } else {
+        beta <- base
+      }
+    }
+    
+    tibble::tibble(
+      continent = ct,
+      beta  = beta
+    )
+  })
+}
 
+# ---- continent-specific HR ----
+compute_continent_hr <- function(v,
+                                 draws,
+                                 cont_levels,
+                                 baseline_continent = "Africa",
+                                 family = c("weibull", "gompertz"),
+                                 shape_col = "shape",
+                                 continent_var = "continent") {
+  family <- match.arg(family)
+  
+  req_meta <- c(".chain", ".iteration", ".draw")
+  has_meta <- req_meta[req_meta %in% names(draws)]
+  
+  if (length(has_meta) == 0) {
+    stop("draws must contain at least one posterior meta column such as .draw")
+  }
+  
+  meta_cols <- draws %>% dplyr::select(dplyr::all_of(has_meta))
+  
+  continent_beta <- .compute_continent_beta(
+    v = v,
+    draws = draws,
+    cont_levels = cont_levels,
+    baseline_continent = baseline_continent,
+    continent_var = continent_var
+  )
+  
+  trans <- .beta_to_hr(
+    beta = continent_beta$beta,
+    draws = draws[rep(seq_len(nrow(draws)), times = length(cont_levels)), , drop = FALSE],
+    family = family,
+    shape_col = shape_col
+  )
+  
+  out <- continent_beta %>%
+    dplyr::mutate(
+      log_hr = trans$log_hr,
+      hr     = trans$hr
+    )
+  
+  dplyr::bind_cols(
+    meta_cols[rep(seq_len(nrow(meta_cols)), times = length(cont_levels)), , drop = FALSE],
+    out
+  ) %>%
+    dplyr::mutate(
+      variable = v,
+      family   = family
+    ) %>%
+    dplyr::relocate(variable, family, continent, .after = dplyr::last_col())
+}
+
+# ---- global HR ----
+compute_global_hr <- function(v,
+                              draws,
+                              w,
+                              cont_levels,
+                              baseline_continent = "Africa",
+                              family = c("weibull", "gompertz"),
+                              shape_col = "shape",
+                              continent_var = "continent") {
+  family <- match.arg(family)
+  
+  base_name <- paste0("b_", v)
+  
+  if (!base_name %in% names(draws)) {
+    stop("No coefficient found for ", base_name)
+  }
+  
+  if (is.null(names(w))) {
+    stop("w must be a named numeric vector with names matching cont_levels")
+  }
+  
+  if (!all(cont_levels %in% names(w))) {
+    missing_w <- cont_levels[!cont_levels %in% names(w)]
+    stop("Missing weights for: ", paste(missing_w, collapse = ", "))
+  }
+  
+  if (abs(sum(w[cont_levels]) - 1) > 1e-8) {
+    warning("Weights for cont_levels do not sum to 1")
+  }
+  
+  beta_global <- draws[[base_name]]
+  
+  for (ct in cont_levels[cont_levels != baseline_continent]) {
+    inter_name <- paste0("b_", v, ":", continent_var, ct)
+    inter_name_alt <- paste0("b_", continent_var, ct, ":", v)
+    
+    if (inter_name %in% names(draws)) {
+      beta_global <- beta_global + as.numeric(w[ct]) * draws[[inter_name]]
+    } else if (inter_name_alt %in% names(draws)) {
+      beta_global <- beta_global + as.numeric(w[ct]) * draws[[inter_name_alt]]
+    }
+  }
+  
+  trans <- .beta_to_hr(
+    beta = beta_global,
+    draws = draws,
+    family = family,
+    shape_col = shape_col
+  )
+  
+  tibble::tibble(
+    variable = v,
+    family   = family,
+    beta     = beta_global,
+    log_hr   = trans$log_hr,
+    hr       = trans$hr
+  )
+}
+
+
+################################################################################
+fit <- readRDS("output/model/country_linnaean_gompertz_full.rds")
 draws <- as_draws_df(fit)
 dat <- fit$data
 levels(dat$continent)
@@ -123,53 +204,52 @@ n_continent <- as.data.frame(table(dat$continent))
 names(n_continent) <- c("continent","n")
 
 vars_linnaean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sampling_effort","sequencing_effort", "range_rarity", "population_density"
 )
 
-global_slopes_linnaean <- map_dfr(
+global_hr_linnaean <- map_dfr(
   vars_linnaean,
-  ~ compute_global_slope(.x, draws = draws, w = w, cont_levels = cont_levels)
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels,family = "gompertz")
 ) %>%
-  mutate(slope = as.numeric(slope)) %>%   
+  mutate(hr = as.numeric(hr)) %>%   
   group_by(variable) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
 
-continent_slopes_linnaean <- map_dfr(
+continent_hr_linnaean <- map_dfr(
   vars_linnaean,
-  ~ compute_continent_slopes(
+  ~ compute_continent_hr(
     v             = .x,
     draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
 ) %>%
   mutate(
-    slope    = as.numeric(slope),
+    hr    = as.numeric(hr),
     continent = factor(continent, levels = cont_levels),
     variable  = factor(variable, levels = vars_linnaean)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   left_join(n_continent,by = "continent")
 
 
-linnaean_slopes <- bind_rows(
-  continent_slopes_linnaean,   
-  global_slopes_linnaean       
+linnaean_hr <- bind_rows(
+  continent_hr_linnaean,   
+  global_hr_linnaean       
 ) %>%
   mutate(shortfall = "Linnaean")
 
-rm(fit,w,vars_linnaean,cont_levels,continent_slopes_linnaean,global_slopes_linnaean,draws,dat,n_continent)
+rm(fit,w,vars_linnaean,cont_levels,continent_hr_linnaean,global_hr_linnaean,draws,dat,n_continent)
 ################################################################################
-fit <- readRDS("output/model/country_wallacean_all.rds")$lognormal
-# bayes_R2(fit)
-# Estimate    Est.Error      Q2.5    Q97.5
-# 0.5796673 0.003815058 0.571929 0.5865687
+fit <- readRDS("output/model/country_wallacean_gompertz_full.rds")
+
 draws <- as_draws_df(fit)
 dat <- fit$data
 levels(dat$continent)
@@ -179,53 +259,51 @@ n_continent <- as.data.frame(table(dat$continent))
 names(n_continent) <- c("continent","n")
 
 vars_wallacean <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sequencing_effort", "range_rarity", "population_density"
 )
 
-global_slopes_wallacean <- map_dfr(
+global_hr_wallacean <- map_dfr(
   vars_wallacean,
-  ~ compute_global_slope(.x, draws = draws, w = w, cont_levels = cont_levels)
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels,family = "gompertz")
 ) %>%
-  mutate(slope = as.numeric(slope)) %>%   
+  mutate(hr = as.numeric(hr)) %>%   
   group_by(variable) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
 
-continent_slopes_wallacean <- map_dfr(
+continent_hr_wallacean <- map_dfr(
   vars_wallacean,
-  ~ compute_continent_slopes(
+  ~ compute_continent_hr(
     v             = .x,
     draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
 ) %>%
   mutate(
-    slope    = as.numeric(slope),
+    hr    = as.numeric(hr),
     continent = factor(continent, levels = cont_levels),
     variable  = factor(variable, levels = vars_wallacean)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   left_join(n_continent,by = "continent")
 
 
-wallacean_slopes <- bind_rows(
-  continent_slopes_wallacean,   
-  global_slopes_wallacean       
+wallacean_hr <- bind_rows(
+  continent_hr_wallacean,   
+  global_hr_wallacean       
 ) %>%
   mutate(shortfall = "Wallacean")
 
-rm(fit,w,vars_wallacean,cont_levels,continent_slopes_wallacean,global_slopes_wallacean,draws,dat,n_continent)
+rm(fit,w,vars_wallacean,cont_levels,continent_hr_wallacean,global_hr_wallacean,draws,dat,n_continent)
 ################################################################################
-fit <- readRDS("output/model/country_darwinian_all.rds")$weibull
-# bayes_R2(fit)
-# Estimate    Est.Error      Q2.5    Q97.5
-# R2 0.5378377 0.004422993 0.5285995 0.5460068
+fit <- readRDS("output/model/country_darwinian_gompertz_full.rds")
 draws <- as_draws_df(fit)
 dat <- fit$data
 levels(dat$continent)
@@ -235,50 +313,51 @@ n_continent <- as.data.frame(table(dat$continent))
 names(n_continent) <- c("continent","n")
 
 vars_darwinian <- c(
-  "body_size", "taxonmic_effort", "taxonomic_activity", "country_area",
+  "body_size", "taxonomic_effort", "taxonomic_activity", "country_area",
   "range_size", "elevation", "latitude", "discharge", "watertemp",
   "preserved_specimen", "sampling_effort","range_rarity", "population_density"
 )
 
-global_slopes_darwinian <- map_dfr(
+global_hr_darwinian <- map_dfr(
   vars_darwinian,
-  ~ compute_global_slope(.x, draws = draws, w = w, cont_levels = cont_levels)
+  ~ compute_global_hr(.x, draws = draws, w = w, cont_levels = cont_levels,family = "gompertz")
 ) %>%
-  mutate(slope = as.numeric(slope)) %>%   
+  mutate(hr = as.numeric(hr)) %>%   
   group_by(variable) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   ungroup() %>%
   mutate(continent = "Global",
          n = nrow(dat))
 
-continent_slopes_darwinian <- map_dfr(
+continent_hr_darwinian <- map_dfr(
   vars_darwinian,
-  ~ compute_continent_slopes(
+  ~ compute_continent_hr(
     v             = .x,
     draws         = draws,
     cont_levels   = cont_levels,
-    baseline_continent = "Africa"
+    baseline_continent = "Africa",
+    family = "gompertz"
   )
 ) %>%
   mutate(
-    slope    = as.numeric(slope),
+    hr    = as.numeric(hr),
     continent = factor(continent, levels = cont_levels),
     variable  = factor(variable, levels = vars_darwinian)
   ) %>%
   group_by(variable, continent) %>%
-  tidybayes::median_qi(slope) %>%
+  tidybayes::mean_qi(hr) %>%
   left_join(n_continent,by = "continent")
 
 
-darwinian_slopes <- bind_rows(
-  continent_slopes_darwinian,   
-  global_slopes_darwinian       
+darwinian_hr <- bind_rows(
+  continent_hr_darwinian,   
+  global_hr_darwinian       
 ) %>%
   mutate(shortfall = "Darwinian")
 
-rm(fit,w,vars_darwinian,cont_levels,continent_slopes_darwinian,global_slopes_darwinian,draws,dat,n_continent)
+rm(fit,w,vars_darwinian,cont_levels,continent_hr_darwinian,global_hr_darwinian,draws,dat,n_continent)
 ################################################################################
-data <- bind_rows(linnaean_slopes, wallacean_slopes, darwinian_slopes) %>%
+data <- bind_rows(linnaean_hr, wallacean_hr, darwinian_hr) %>%
   mutate(
     shortfall = recode(
       shortfall,
@@ -287,10 +366,10 @@ data <- bind_rows(linnaean_slopes, wallacean_slopes, darwinian_slopes) %>%
       "Linnaean"  = "Description"
     )
   )
-
+data$variable <- ifelse(data$variable == "taxonmic_effort","taxonomic_effort",data$variable)
 rename_map <- c(
   body_size          = "Body size",
-  preserved_specimen = "N. preserved\nspecimens",
+  preserved_specimen = "N. preserved<br>specimens",
   range_size         = "Range size",
   range_rarity       = "Range rarity",
   latitude           = "Latitude",
@@ -299,7 +378,7 @@ rename_map <- c(
   watertemp          = "Water temperature",
   elevation          = "Elevation",
   population_density = "Human density",
-  taxonmic_effort    = "Taxonomic effort",
+  taxonomic_effort    = "Taxonomic effort",
   taxonomic_activity = "Taxonomic activity",
   sampling_effort    = "Sampling effort",
   sequencing_effort  = "Sequencing effort"
@@ -331,7 +410,7 @@ data <- data %>%
       variable %in% c("Water temperature","Streamflow") ~ "Environment",
       variable %in% c("Country area","Latitude",
                       "Range rarity","Range size") ~ "Geography",
-      variable %in% c("N. preserved\nspecimens","Body size") ~ "Biology",
+      variable %in% c("N. preserved<br>specimens","Body size") ~ "Biology",
       TRUE ~ NA_character_
     ),
     group = factor(group,
@@ -348,84 +427,129 @@ set2_colors <- c(
 continent <- c(
   Africa =
     "Africa<br>
-        <span style='color:#D55E00;'>n=8,037</span><br>
+        <span style='color:#D55E00;'>n=8,023</span><br>
         <span style='color:#009E73;'>n=10,681</span><br>
-        <span style='color:#435792;'>n=10,534</span>",
+        <span style='color:#435792;'>n=10,592</span>",
   Oceania =
     "Oceania<br>
         <span style='color:#D55E00;'>n=597</span><br>
         <span style='color:#009E73;'>n=894</span><br>
-        <span style='color:#435792;'>n=844</span>",
+        <span style='color:#435792;'>n=845</span>",
   Asia =
     "Asia<br>
-        <span style='color:#D55E00;'>n=5,780</span><br>
+        <span style='color:#D55E00;'>n=5,776</span><br>
         <span style='color:#009E73;'>n=10,271</span><br>
-        <span style='color:#435792;'>n=9,321</span>",
+        <span style='color:#435792;'>n=9,402</span>",
   `North America` =
     "North America<br>
         <span style='color:#D55E00;'>n=2,395</span><br>
         <span style='color:#009E73;'>n=2,972</span><br>
-        <span style='color:#435792;'>n=2,887</span>",
+        <span style='color:#435792;'>n=2,890</span>",
   `South America` =
     "South America<br>
         <span style='color:#D55E00;'>n=10,858</span><br>
         <span style='color:#009E73;'>n=13,871</span><br>
-        <span style='color:#435792;'>n=13,633</span>",
+        <span style='color:#435792;'>n=13,786</span>",
   Europe =
     "Europe<br>
         <span style='color:#D55E00;'>n=1,131</span><br>
         <span style='color:#009E73;'>n=2,746</span><br>
-        <span style='color:#435792;'>n=2,659</span>",
+        <span style='color:#435792;'>n=2,671</span>",
   Global =
     "Global<br>
-        <span style='color:#D55E00;'>bayes R<sup>2</sup>=0.85</span><br>
-        <span style='color:#009E73;'>bayes R<sup>2</sup>=0.58</span><br>
-        <span style='color:#435792;'>bayes R<sup>2</sup>=0.54</span>"
+        <span style='color:#D55E00;'>bayes R<sup>2</sup>=0.70</span><br>
+        <span style='color:#009E73;'>bayes R<sup>2</sup>=0.52</span><br>
+        <span style='color:#435792;'>bayes R<sup>2</sup>=0.53</span>"
 )
 
 
-p <- ggplot(data = data, aes(x = slope, y =  interaction(variable, group, sep = ":"),fill = shortfall,colour = shortfall)) +
-  annotate("rect", ymin = 0.5, ymax = 4.5,
-           xmin = -Inf, xmax = Inf, fill = "grey95") +
-  annotate("rect", ymin = 4.5, ymax = 6.5,
-           xmin = -Inf, xmax = Inf, fill = "grey90") +
-  annotate("rect", ymin = 6.5, ymax = 8.5,
-           xmin = -Inf, xmax = Inf, fill = "grey95") +
-  annotate("rect", ymin = 8.5, ymax = 12.5,
-           xmin = -Inf, xmax = Inf, fill = "grey90") +
-  annotate("rect", ymin = 12.5, ymax = 14.5,
-           xmin = -Inf, xmax = Inf, fill = "grey95") +
-  geom_vline(xintercept = 0, linetype = 2, size = 0.4, color = "gray50") +  # Add a vertical line at zero for reference
-  geom_pointrange(aes(xmin = .lower, xmax = .upper),
-                  position = position_dodge(0.6), 
-                  linewidth = 0.5, shape = 21, stroke = 0.2, size = 0.46) +
-  scale_fill_manual(name = "First documentation", values = set2_colors, limits = c("Description", "Geolocation", "Sequencing")) +  # Set custom colors for fill
-  scale_color_manual(name = "First documentation", values = set2_colors, limits = c("Description", "Geolocation", "Sequencing")) +  # Set custom colors for color
-  theme_classic()+
-  facet_wrap2(~ continent, nrow = 1, scales = "free_x",labeller = labeller(continent = continent)) +
-  geom_vline(xintercept = 0, linetype = 2)+
-  scale_y_discrete(
-    expand = c(0, 0),
-    guide  = legendry::guide_axis_nested(key = key_range_auto(sep = ":"),
-                                         # Customise the appearance of different levels using levels_text
-                                         levels_text = list(
-                                           element_text(colour = "black",size = 10), # Level 1 text (variable)
-                                           element_text(colour = "black", angle = 90, size = 10, hjust = 0.5)  # Level 2 text (group)
-                                         )
+bg_x <- data %>%
+  group_by(continent) %>%
+  summarise(
+    xmin = min(.lower[.lower > 0], na.rm = TRUE),
+    xmax = max(.upper, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+bg_y <- tibble::tribble(
+  ~ymin, ~ymax, ~bg_fill,
+  0.5,   4.5,  "grey95",
+  4.5,   6.5,  "grey90",
+  6.5,   8.5,  "grey95",
+  8.5,  12.5,  "grey90",
+  12.5,  14.5,  "grey95"
+)
+
+bg_rect <- tidyr::crossing(bg_x, bg_y)
+
+
+p <- ggplot(
+  data = data,
+  aes(
+    x = hr,
+    y = interaction(variable, group, sep = ":"),
+    fill = shortfall,
+    colour = shortfall
+  )
+) +
+  geom_rect(
+    data = bg_rect,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = bg_rect$bg_fill,
+    colour = NA
+  ) +
+  geom_vline(xintercept = 1, linetype = 2, size = 0.4, color = "gray30") +
+  geom_pointrange(
+    aes(xmin = .lower, xmax = .upper),
+    position = position_dodge(0.6),
+    linewidth = 0.5, shape = 21, stroke = 0.2, size = 0.46
+  ) +
+  scale_fill_manual(
+    name = "First documentation",
+    values = set2_colors,
+    limits = c("Description", "Geolocation", "Sequencing")
+  ) +
+  scale_color_manual(
+    name = "First documentation",
+    values = set2_colors,
+    limits = c("Description", "Geolocation", "Sequencing")
+  ) +
+  scale_x_log10(
+    guide = "axis_logticks",
+    breaks = c(0.1, 1, 10),
+    labels = expression(10^-1, 10^0, 10^1)
+  ) +
+  facet_wrap(
+    ~ continent,
+    nrow = 1,
+    scales = "free_x",
+    labeller = labeller(continent = continent)
+  ) +
+  scale_y_discrete(expand = expansion(c(0, 0))) +
+  guides(
+    y = guide_axis_nested(
+      key = ":",
+      levels_text = list(
+        element_markdown(angle = 0, size = 8, vjust = 0.5, colour = "black"),
+        element_text(angle = 90, colour = "black", size = 8, hjust = 0.5, face = "bold")
+      )
     )
   ) +
+  theme_classic()+
   theme(strip.background = element_blank(),  # Remove background for facet strips
-        #panel.background = element_rect(fill = "grey90"),
+        # panel.background = element_rect(fill = "grey90"),
+        # panel.grid.major  = element_blank(),
         legend.title = element_text(colour = "black", size = 9),  # Customize legend title
         legend.text = element_text(colour = "black", size = 8),  # Customize legend text
         legend.key.height = unit(0.5, "cm"),  # Adjust legend key height
+        legend.key = element_rect(fill = NA, colour = NA),
         axis.title = element_text(colour = "black", size = 10),  # Customize axis titles
         axis.text.x = element_text(colour = "black", size = 8),  # Customize x-axis text
-        strip.text = element_markdown(size = 8),  # Customize strip text
-        axis.text.y = element_markdown(size = 8, colour = "black")) + # Use markdown for y-axis text color
+        strip.text = element_markdown(size = 8)
+  ) +  # Customize nested axis text appearance
   ylab("") +  # Remove y-axis label
-  xlab("Standardized coefficient (95% CI)")  # x-axis label for standardized coefficients with 95% CI
-
+  xlab("Hazard ratio (95% CI)")
 
 ################################################################################
 inland <- readRDS("input/raw/country.rds")
@@ -497,8 +621,7 @@ p6 <- ggplot() +
         panel.grid.minor = element_blank(),
         panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
 
-#https://stackoverflow.com/questions/43207947/whole-earth-polygon-for-world-map-in-ggplot2-and-sf
-p8 <- ggplot() +
+p7 <- ggplot() +
   ggrastr::rasterise(geom_sf(data = world, fill = "gray80", color = NA, size = 0.2),dpi=300) +  
   ggrastr::rasterise(geom_sf(data = inland_grouped_fixed,aes(fill = continent), color = NA, size = 0.5, show.legend = F),dpi = 300) +  
   scale_fill_manual(values = c(
@@ -513,11 +636,10 @@ p8 <- ggplot() +
   theme_minimal() +
   theme(axis.text = element_blank(),
         panel.grid.minor = element_blank(),
-        panel.grid.major = element_line(color = "#ebebe5", size = 0.01),
-        )
+        panel.grid.major = element_line(color = "#ebebe5", size = 0.01))
 
 
-pp <- p1 +p2 +p3 +p4 +p5+p6+p8 +plot_layout(nrow = 1)
+pp <- p1 +p2 +p3 +p4 +p5+p6+p7 +plot_layout(nrow = 1)
 
 
 # 1) enlarge the top plot margin of p
