@@ -184,6 +184,7 @@ clean_refs <- function(df, col_name) {
 #' }
 #'
 #' @param df A data frame containing \code{ref_year} (numeric) and \code{ref_authorship}.
+#' @param t_eval Optional integer or numeric year at which taxonomic effort is evaluated.If \code{NULL} (default), TAE is calculated using the latest available reference year
 #' @param lambda Numeric. Temporal decay parameter. Default is \eqn{\ln(2)/20}.
 #' @param author_sep Character. Separator used to split authors. Default is \code{","}.
 #'
@@ -200,20 +201,88 @@ clean_refs <- function(df, col_name) {
 #'
 #' @export
 calculate_TAE <- function(df,
+                          t_eval = NULL,
                           lambda = log(2) / 20,
                           author_sep = ",") {
   
-  if (is.null(df) || nrow(df) == 0) return(NA_real_)
+  # -----------------------------
+  # 0. Basic input checks
+  # -----------------------------
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
+    return(NA_real_)
+  }
   
+  if (!"ref_year" %in% names(df)) {
+    warning("Column 'ref_year' not found.")
+    return(NA_real_)
+  }
+  
+  if (!"ref_authorship" %in% names(df)) {
+    df$ref_authorship <- NA_character_
+  }
+  
+  # -----------------------------
+  # 1. Keep only valid reference years
+  # -----------------------------
   df2 <- df[!is.na(df$ref_year), , drop = FALSE]
   if (nrow(df2) == 0) return(NA_real_)
-  df2$ref_year <- as.integer(df2$ref_year)
   
-  if (exists("clean_refs")) {
+  df2$ref_year <- suppressWarnings(as.integer(df2$ref_year))
+  df2 <- df2[!is.na(df2$ref_year), , drop = FALSE]
+  if (nrow(df2) == 0) return(NA_real_)
+  
+  # -----------------------------
+  # 2. Optional cleaning of authorship field
+  # -----------------------------
+  if (exists("clean_refs", mode = "function")) {
     df2 <- clean_refs(df2, "ref_authorship")
   }
   
-  split_auth <- strsplit(df2$ref_authorship %||% "", paste0("\\s*", author_sep, "\\s*"), perl = TRUE)
+  df2$ref_authorship[is.na(df2$ref_authorship)] <- ""
+  
+  # -----------------------------
+  # 3. Define time range
+  # -----------------------------
+  t_min_all <- min(df2$ref_year, na.rm = TRUE)
+  t_max_all <- max(df2$ref_year, na.rm = TRUE)
+  
+  # If t_eval is NULL, use the latest available year
+  if (is.null(t_eval)) {
+    t_eval <- t_max_all
+  }
+  
+  t_eval <- suppressWarnings(as.integer(t_eval))
+  if (!is.finite(t_eval)) {
+    warning("Invalid 't_eval'.")
+    return(NA_real_)
+  }
+  
+  # Before the first reference year, TAE is undefined
+  if (t_eval < t_min_all) {
+    return(NA_real_)
+  }
+  
+  # -----------------------------
+  # MODIFIED: do NOT cap at t_max_all
+  # Use the evaluation year itself
+  # -----------------------------
+  t_eval_eff <- t_eval
+  
+  # -----------------------------
+  # 4. Keep only references available up to t_eval_eff
+  # -----------------------------
+  df2_sub <- df2[df2$ref_year <= t_eval_eff, , drop = FALSE]
+  if (nrow(df2_sub) == 0) return(NA_real_)
+  
+  # -----------------------------
+  # 5. Count unique authors per reference
+  # -----------------------------
+  split_auth <- strsplit(
+    df2_sub$ref_authorship,
+    paste0("\\s*", author_sep, "\\s*"),
+    perl = TRUE
+  )
+  
   Ai <- vapply(split_auth, function(x) {
     x <- trimws(x)
     x <- x[nzchar(x)]
@@ -222,20 +291,27 @@ calculate_TAE <- function(df,
   
   Ai[is.na(Ai) | Ai < 0] <- 0L
   
-  t_max <- max(df2$ref_year, na.rm = TRUE)
-  t_min <- min(df2$ref_year, na.rm = TRUE)
-  D <- (t_max - t_min + 1L)
+  # -----------------------------
+  # 6. Time-corrected TAE
+  # MODIFIED: use t_eval_eff rather than latest reference year
+  # -----------------------------
+  t_current <- t_eval_eff
+  t_start   <- min(df2_sub$ref_year, na.rm = TRUE)
   
-  N <- length(Ai)
-  if (N == 0) return(NA_real_)
+  D <- t_current - t_start + 1L
+  age <- pmax(0, t_current - df2_sub$ref_year)
   
-  age <- pmax(0, t_max - df2$ref_year)
   w_i <- log1p(Ai) * exp(-lambda * age)
   
+  # -----------------------------
+  # 7. Final TAE
+  # -----------------------------
   TAE <- sqrt(D) * mean(w_i)
-  return(TAE)
+  
+  if (!is.finite(TAE)) return(NA_real_)
+  
+  return(as.numeric(TAE))
 }
-
 
 # small helper for `%||%`
 `%||%` <- function(x, y) if (is.null(x)) y else x
