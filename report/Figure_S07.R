@@ -1,9 +1,9 @@
-# ------------------------------------------------------------------------------
+
 # Supplementary Figure S7
 # Variable importance for occurrence record delay (Wallacean)
 # Lognormal survival model + DALEX permutation importance
-# ------------------------------------------------------------------------------
 
+rm(list = ls())
 library(dplyr)
 library(purrr)
 library(tidyr)

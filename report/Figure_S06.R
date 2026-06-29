@@ -1,9 +1,8 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S6
 # Variable-wise and group-wise relative importance of predictors in survival models of species description across continents
 # Variable importance for species discovery delay (Linnaean)
 # Lognormal survival model + DALEX permutation importance
-# ------------------------------------------------------------------------------
+
 library(dplyr)
 library(purrr)
 library(tidyr)
@@ -645,4 +644,3 @@ plot_grid(
 
 
 ggsave("figures/supplement/Figure_S6.png",dpi = 300, units = "cm", width = 20, height = 20)
-

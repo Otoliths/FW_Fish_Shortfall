@@ -3,7 +3,6 @@
 # ============================================================
 
 rm(list = ls())
-
 library(dplyr)
 library(ggplot2)
 library(GGally)
@@ -72,6 +71,7 @@ tag_strategy <- function(df, q = 0.10) {
 # Data I/O (here)
 # -----------------------------
 cost      <- read_rds_h("input", "processed", "cost_basin_all.rds")
+cost$cost_total <- cost$cost_t_norm + cost$cost_f_norm + cost$cost_s_norm ####
 sdg       <- read_rds_h("input", "processed", "sdg_basin.rds")
 shortfall <- read_rds_h("input", "processed", "basin_shortfall.rds")
 
@@ -105,8 +105,8 @@ names(sdg)[19:20] <- c("Socioeconomics", "Governance")
 # Merge to analysis table
 # -----------------------------
 data <- shortfall %>%
-  select(basin_id = basin_id, Shortfall = NSCI_norm) %>%
-  left_join(cost %>% select(basin_id = basin_id, Investment = cost_scale), by = "basin_id") %>%
+  select(basin_id = basin_id, Shortfall = NSCI) %>%
+  left_join(cost %>% select(basin_id = basin_id, Investment = cost_total), by = "basin_id") %>%
   left_join(sdg  %>% select(basin_id, Socioeconomics, Governance), by = "basin_id") %>%
   left_join(biogeographic_list[, c(1, 3)], by = "basin_id")
 
@@ -121,9 +121,9 @@ data <- data %>% filter(basin_id %in% basin_shortfalls)
 ##################################################################################
 df_nsc <- shortfall %>% left_join(biogeographic_list[,c(1,3)],by = "basin_id")
 
-basins <- df_nsc %>% select(basin_id,NSCI_norm,biogeographic_realm) %>% na.omit()
+basins <- df_nsc %>% select(basin_id,NSCI,biogeographic_realm) %>% na.omit()
 # Step 1: Realm-based expectation model
-model <- lm(NSCI_norm ~ biogeographic_realm, data = basins)
+model <- lm(NSCI ~ biogeographic_realm, data = basins)
 
 # Step 2: Realm-adjusted residuals
 basins$resid_NSCI <- residuals(model)
@@ -154,7 +154,7 @@ min_max_normalize_safe <- function(x, epsilon = 1e-6) {
 }
 
 data$Investment <- min_max_normalize_safe(data$Investment)
-data$Shortfall <- min_max_normalize_safe(data$Shortfall)
+#data$Shortfall <- min_max_normalize_safe(data$Shortfall)
 data$Socioeconomics <- min_max_normalize_safe(data$Socioeconomics)
 data$Governance <- min_max_normalize_safe(data$Governance)
 rm(cost,sdg,sdg.pca,shortfall,biogeographic_list,basin_shortfalls,min_max_normalize_safe)
@@ -398,7 +398,7 @@ pp2 <- ggdraw() +
   draw_plot(pp2, 0, 0, 1, 1) +                             
   draw_plot(p2, 0.06, 0.02, 0.2, 0.5) +
   draw_plot(get_legend(p_legend), 0.07, 0.63, 0.06, 0.03) +
-  draw_label(label = expression(Delta[NSCI] == -0.24),
+  draw_label(label = expression(Delta[NSCI] == -0.30),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
@@ -476,7 +476,7 @@ pp3 <- ggplot()+
 pp3 <- ggdraw() +
   draw_plot(pp3, 0, 0, 1, 1) +                             
   draw_plot(p3, 0.06, 0.02, 0.2, 0.5) +
-  draw_label(label = expression(Delta[NSCI] == -0.34),
+  draw_label(label = expression(Delta[NSCI] == -0.43),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
@@ -553,7 +553,7 @@ pp4 <- ggplot()+
 pp4 <- ggdraw() +
   draw_plot(pp4, 0, 0, 1, 1) +                             
   draw_plot(p4, 0.06, 0.02, 0.2, 0.5)  +
-  draw_label(label = expression(Delta[NSCI] == -0.43),
+  draw_label(label = expression(Delta[NSCI] == -0.55),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
@@ -641,7 +641,7 @@ pp5 <- ggplot()+
 pp5 <- ggdraw() +
   draw_plot(pp5, 0, 0, 1, 1) +                             
   draw_plot(p5, 0.01, 0.01, 0.2, 0.55)  +
-  draw_label(label = expression(Delta[NSCI] == -0.28),
+  draw_label(label = expression(Delta[NSCI] == -0.35),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
@@ -661,7 +661,7 @@ pp5 <- ggdraw() +
 # ------------------------------------------------------------
 df6 <- data %>%
   select(basin_id, biogeographic_realm, Investment, Socioeconomics, Governance, Shortfall) %>%
-  mutate(Investment_adj = Investment* (1-0.5*(1-Socioeconomics))) %>%
+  mutate(Investment_adj = Investment* (1-0.4*(1-Socioeconomics))) %>%
   na.omit() %>%
   mutate(
     # Convert all objectives to "minimize" form for nds_rank():
@@ -726,11 +726,11 @@ pp6 <- ggplot()+
 pp6 <- ggdraw() +
   draw_plot(pp6, 0, 0, 1, 1) +                             
   draw_plot(p6, 0.01, 0.01, 0.2, 0.55)  +
-  draw_label(label = expression(Delta[NSCI] == -0.25),
+  draw_label(label = expression(Delta[NSCI] == -0.33),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 3.80'),
+  draw_label(label = expression(BWR[NSCI] * ' = 4.33'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
 row_pair <- function(left_plot, right_plot, labels) {
@@ -869,16 +869,12 @@ calculate_BWR_with_CI(df_plot_realm_2 %>% mutate(scenario = "scenario_2") , scen
 # ---------------------- scenario_3 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_3 %>% mutate(scenario = "scenario_3") , scenario = "scenario_3")
 # BWR = 3.052 (95% CI: 1.609–5.790), n_best = 203, n_worst = 346
-
 # ---------------------- scenario_4 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_4 %>% mutate(scenario = "scenario_4") , scenario = "scenario_4")
 # BWR = 8.587 (95% CI: 5.835–12.635), n_best = 183, n_worst = 426
-
 # ---------------------- scenario_5 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_5 %>% mutate(scenario = "scenario_5") , scenario = "scenario_5")
 # BWR = 2.180 (95% CI: 1.500–3.171), n_best = 322, n_worst = 174
-
 # ---------------------- scenario_6 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_6 %>% mutate(scenario = "scenario_6") , scenario = "scenario_6")
-# BWR = 3.804 (95% CI: 2.866–5.050), n_best = 225, n_worst = 189
-
+# BWR = 4.330 (95% CI: 3.235–5.797), n_best = 229, n_worst = 193

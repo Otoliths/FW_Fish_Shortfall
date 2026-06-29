@@ -1,7 +1,7 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S1
 # National-level bivariate patterns of biodiversity knowledge shortfalls in freshwater fishes
 
+rm(list = ls())
 library(dplyr)
 library(ggplot2)
 library(ggpubr)
@@ -315,4 +315,3 @@ p_combined <- plot_grid(
 p_combined
 
 ggsave("figures/supplement/Figure_S1.png",width = 15, height = 20, units = "cm",dpi = 300)
-

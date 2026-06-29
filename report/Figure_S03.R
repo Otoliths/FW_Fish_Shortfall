@@ -1,9 +1,7 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S3
 # Effects of predictors on species documentation processes in global freshwater fishes across continents
 
 rm(list = ls())
-
 library(brms)
 library(dplyr)
 library(purrr)

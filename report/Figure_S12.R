@@ -1,7 +1,7 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S12 
 # Scenario-based prioritization of countries for freshwater fish biodiversity collection
-# ------------------------------------------------------------------------------
+
+rm(list = ls())
 library(dplyr)
 library(ggplot2)
 library(GGally)
@@ -12,6 +12,7 @@ library(ggh4x)
 library(cowplot)
 
 cost <- readRDS("input/processed/cost_country_all.rds")
+cost$cost_total <- cost$cost_t_norm + cost$cost_f_norm + cost$cost_s_norm ####
 sdg <- readRDS("input/processed/sdg_country.rds")
 shortfall <- readRDS("input/processed/country_shortfall.rds")
 country_list <- read.csv("input/raw/country_list.csv")
@@ -34,8 +35,8 @@ sdg$PC2 <- sdg.pca$x[, 2]
 
 names(sdg)[21:22] <- c("Socioeconomics","Governance")
 
-data <- shortfall %>% select(iso3 = iso3, Shortfall = NSCI_norm) %>%
-  left_join(cost %>% select(iso3 = iso3, Investment = cost_scale), by = "iso3") %>%
+data <- shortfall %>% select(iso3 = iso3, Shortfall = NSCI) %>%
+  left_join(cost %>% select(iso3 = iso3, Investment = cost_total), by = "iso3") %>%
   left_join(sdg %>% select(iso3,Socioeconomics,Governance), by = "iso3") %>%
   left_join(country_list[,c(1,5)],by = "iso3") 
 
@@ -80,7 +81,7 @@ min_max_normalize_safe <- function(x, epsilon = 1e-6) {
 }
 
 data$Investment <- min_max_normalize_safe(data$Investment)
-data$Shortfall <- min_max_normalize_safe(data$Shortfall)
+#data$Shortfall <- min_max_normalize_safe(data$Shortfall)
 data$Socioeconomics <- min_max_normalize_safe(data$Socioeconomics)
 data$Governance <- min_max_normalize_safe(data$Governance)
 rm(cost,sdg,sdg.pca,shortfall,country_list,country_shortfalls,min_max_normalize_safe)
@@ -209,11 +210,7 @@ p1
 
 case1 <- inland %>% left_join(df_plot_realm_1[,c(1,7,9)], by = "iso3")
 pp1 <- ggplot()+
-  # ggrastr::rasterise(geom_sf(data = world_map %>%
-  #                              st_wrap_dateline(options = c("WRAPDATELINE=YES","DATELINEOFFSET=180")),
-  #                            fill = "#d3d3d3", colour = NA),dpi = 300) +
   ggrastr::rasterise(geom_sf(data =case1 ,aes(fill = residuals),colour = "white", linewidth = 0.03),dpi = 300)+
-  #scale_fill_identity(na.value = "grey70")+
   scale_fill_gradientn(name = "Pareto frontier",
                        rescaler = ~ scales::rescale_mid(.x, mid = 0),
                        colours = c("#FFC000", "grey90","#00B050"),na.value = "grey70"
@@ -288,7 +285,7 @@ p2 <- ggplot() +
   labs(x = "Cost", y = expression(Shortfall[NSCI])) +
   theme_classic() +
   scale_x_continuous(breaks  = c(0, 0.5, 1)) +
-  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5,1),limits = c(0,1.3)) +
   theme(
     axis.text  = element_text(colour = "black", size = 5),
     axis.title = element_text(colour = "black", size = 6),
@@ -353,12 +350,13 @@ pp2 <- ggdraw() +
   draw_plot(pp2, 0, 0, 1, 1) +                             
   draw_plot(p2, 0.06, 0.02, 0.2, 0.5) +
   draw_plot(get_legend(p_legend), 0.07, 0.63, 0.06, 0.03) +
-  draw_label(label = expression(Delta[NSCI] == 0.08),
+  draw_label(label = expression(Delta[NSCI] == -0.02),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " = 0.18"),
+  draw_label(label = expression("E-test, " * italic(p) * " < 0.05"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 1.61'),
+  draw_label(label = expression(BWR[NSCI] * ' = 1.68'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
+
 
 ################################################################################
 # Prepare data: Shortfall + Socioeconomics
@@ -409,7 +407,7 @@ p3 <- ggplot() +
   labs(x = "Income", y = expression(Shortfall[NSCI])) +
   theme_classic() +
   scale_x_continuous(breaks  = c(0, 0.5, 1)) +
-  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5,1),limits = c(0,1.3)) +
   theme(
     axis.text  = element_text(colour = "black", size = 5),
     axis.title = element_text(colour = "black", size = 6),
@@ -448,13 +446,12 @@ pp3 <- ggplot()+
 pp3 <- ggdraw() +
   draw_plot(pp3, 0, 0, 1, 1) +                             
   draw_plot(p3, 0.06, 0.02, 0.2, 0.5) +
-  draw_label(label = expression(Delta[NSCI] == 0.08),
+  draw_label(label = expression(Delta[NSCI] == -0.14),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.05"),
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.13"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 0.51'),
+  draw_label(label = expression(BWR[NSCI] * ' = 0.39'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
-
 ################################################################################
 
 #    Goal: prioritize basins with
@@ -507,7 +504,7 @@ p4 <- ggplot() +
   labs(x = "Protection", y = expression(Shortfall[NSCI])) +
   theme_classic() +
   scale_x_continuous(breaks  = c(0, 0.5, 1)) +
-  scale_y_continuous(breaks = c(0,0.5, 1)) +
+  scale_y_continuous(breaks = c(0,0.5,1),limits = c(0,1.3)) +
   theme(
     axis.text  = element_text(colour = "black", size = 5),
     axis.title = element_text(colour = "black", size = 6),
@@ -545,25 +542,14 @@ pp4 <- ggplot()+
 pp4 <- ggdraw() +
   draw_plot(pp4, 0, 0, 1, 1) +                             
   draw_plot(p4, 0.06, 0.02, 0.2, 0.5)  +
-  draw_label(label = expression(Delta[NSCI] == -0.08),
+  draw_label(label = expression(Delta[NSCI] == -0.11),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression("E-test, " * italic(p) * " < 0.05"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 0.26'),
+  draw_label(label = expression(BWR[NSCI] * ' = 0.73'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
-
 ################################################################################
-#High Shortfall × Low Investment × High Socioeconomics × High Governance
-#Need × Efficiency × Capacity × Governance
-# Socioeconomics = 能力（越高越好）
-# Governance = 治理能力（越高越好）
-# Investment = 金钱/时间/成本（越低越好
-# 必须在 Methods 中写清楚：
-# Investment = 科学投入成本
-# Socioeconomics = 社会经济发展度（能力）
-# Governance = 制度有效性
-# 否则审稿人会误会 investment = socio inequality。
 # ------------------------------------------------------------
 #  Prepare data for 4-objective trade-off:
 #    Goal: High Shortfall × Low Investment × High Socioeconomics × High Governance
@@ -669,18 +655,18 @@ pp5 <- ggplot()+
 pp5 <- ggdraw() +
   draw_plot(pp5, 0, 0, 1, 1) +                             
   draw_plot(p5, 0.01, 0.01, 0.2, 0.55)  +
-  draw_label(label = expression(Delta[NSCI] == -0.10),
+  draw_label(label = expression(Delta[NSCI] == -0.07),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.05"),
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.19"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 0.42'),
+  draw_label(label = expression(BWR[NSCI] * ' = 1.17'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
 ################################################################################
 df6 <- data %>%
   select(iso3, continent, Investment, Socioeconomics, Governance, Shortfall) %>%
   na.omit() %>%
-  mutate(Investment_adj = Investment* (1-0.5*(1-Socioeconomics))) %>%
+  mutate(Investment_adj = Investment* (1-0.2*(1-Socioeconomics))) %>%
   mutate(
     # Convert all objectives to "minimize" form for nds_rank():
     # We want to MAXIMIZE Shortfall → minimize -Shortfall
@@ -772,13 +758,12 @@ pp6 <- ggplot()+
 pp6 <- ggdraw() +
   draw_plot(pp6, 0, 0, 1, 1) +                             
   draw_plot(p6, 0.01, 0.01, 0.2, 0.55)  +
-  draw_label(label = expression(Delta[NSCI] == -0.11),
+  draw_label(label = expression(Delta[NSCI] == -0.10),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.05"),
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.71"),
              x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression(BWR[NSCI] * ' = 1.04'),
+  draw_label(label = expression(BWR[NSCI] * ' = 1.55'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
-
 
 ################################################################################
 row_pair <- function(left_plot, right_plot, labels) {
@@ -918,20 +903,20 @@ calculate_BWR_with_CI <- function(df, scenario) {
 
 # ---------------------- scenario_2 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_2 %>% mutate(scenario = "scenario_2") , scenario = "scenario_2")
-# BWR = 1.724 (95% CI: 1.053–2.823), n_best = 11, n_worst = 13
+# BWR = 1.677 (95% CI: 1.062–2.650), n_best = 18, n_worst = 13
 
 # ---------------------- scenario_3 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_3 %>% mutate(scenario = "scenario_3") , scenario = "scenario_3")
-# BWR = 0.580 (95% CI: 0.196–1.717), n_best = 13, n_worst = 11
+# BWR = 0.394 (95% CI: 0.149–1.042), n_best = 18, n_worst = 11
 
 # ---------------------- scenario_4 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_4 %>% mutate(scenario = "scenario_4") , scenario = "scenario_4")
-# BWR = 0.801 (95% CI: 0.490–1.310), n_best = 11, n_worst = 17
+# BWR = 0.734 (95% CI: 0.524–1.029), n_best = 15, n_worst = 13
 
 # ---------------------- scenario_5 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_5 %>% mutate(scenario = "scenario_5") , scenario = "scenario_5")
-# BWR = 1.228 (95% CI: 0.431–3.502), n_best = 24, n_worst = 8
+# BWR = 1.171 (95% CI: 0.443–3.096), n_best = 24, n_worst = 8
 
 # ---------------------- scenario_6 ---------------------- #
 calculate_BWR_with_CI(df_plot_realm_6 %>% mutate(scenario = "scenario_6") , scenario = "scenario_6")
-# BWR = 1.444 (95% CI: 0.829–2.516), n_best = 20, n_worst = 11
+# BWR = 1.552 (95% CI: 1.015–2.374), n_best = 22, n_worst = 9

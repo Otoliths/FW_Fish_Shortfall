@@ -1,10 +1,9 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S2
 # Relationship between basin-level probability of lacking sequences
 # (Darwinian shortfall component) and phylogenetic deficit
 # (PD-based evolutionary incompleteness).
 # ------------------------------------------------------------------------------
-
+rm(list = ls())
 library(dplyr)
 library(ggplot2)
 library(sf)
@@ -395,6 +394,3 @@ ggsave(
   units    = "cm",
   dpi      = 300
 )
-
-
-

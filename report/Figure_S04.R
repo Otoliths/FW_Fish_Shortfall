@@ -1,14 +1,12 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S4
 # Counts of significant predictor effects across biogeographic realms and continents
-
+rm(list = ls())
 library(brms)
 library(dplyr)
 library(purrr)
 library(tidybayes)
 library(ggplot2)
 options(warn = -1)
-
 
 # ---- helper: validate family and transform beta to HR ----
 .beta_to_hr <- function(beta,

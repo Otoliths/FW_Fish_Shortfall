@@ -1,11 +1,9 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S9 (biogeographic realms)
-# ------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------
+
 # Darwinian shortfall: variable importance for sequence acquisition delay
 # Gamma survival model + DALEX permutation importance
-# ------------------------------------------------------------------------------
 
+rm(list = ls())
 library(dplyr)
 library(purrr)
 library(tidyr)

@@ -386,7 +386,7 @@ p_bi_legend <- ggplot() +
   scale_fill_identity() +
   geom_text(
     data = count_df,
-    aes(x = x, y = y, label = scales::percent(pct, accuracy = 1)),
+    aes(x = x, y = y, label = scales::percent(pct, accuracy = 0.1)),
     colour = "white", fontface = "bold", size = 2.2
   ) +
   scale_x_continuous(breaks = 1:2, labels = c("N", "Y"), expand = c(0.015, 0.015)) +
@@ -432,7 +432,7 @@ df_nsc <- basin_vals %>%
     NSCI   = SL + SW_adj + SD_adj,
     NSCI_norm = mm01(NSCI)
   ) %>%
-  select(basin_id, NSCI_norm)
+  select(basin_id, NSCI)
 
 #dir.create(dirname(path_out_rds), showWarnings = FALSE, recursive = TRUE)
 #saveRDS(df_nsc, path_out_rds)
@@ -443,7 +443,7 @@ dt_nsc <- inland_sf %>%
 
 p_nsc <- ggplot(dt_nsc) +
   ggrastr::rasterise(geom_sf(data = world_map, fill = "lightgrey", colour = NA), dpi = 300) +
-  ggrastr::rasterise(geom_sf(aes(fill = NSCI_norm), colour = "white", linewidth = 0.03), dpi = 300) +
+  ggrastr::rasterise(geom_sf(aes(fill = NSCI), colour = "white", linewidth = 0.03), dpi = 300) +
   scale_fill_viridis_c(
     name = "NSCI",
     na.value = "lightgrey",
@@ -463,7 +463,8 @@ p_nsc <- ggplot(dt_nsc) +
   bi_theme() +
   coord_sf(crs = "+proj=moll +lon_0=0", ylim = y_limits, expand = FALSE) +
   theme(
-    legend.position = c(0.06, 0.13),
+    legend.position = "none",
+    plot.margin = margin(0,0,0,0),
     legend.justification = c(0, 0),
     legend.background = element_blank(),
     legend.key.height = unit(0.5, "cm"),
@@ -471,6 +472,58 @@ p_nsc <- ggplot(dt_nsc) +
     legend.text  = element_text(size = 8, margin = margin(l = 4)),
     legend.axis.line = element_line(linewidth = 0.2, colour = "black")
   )
+x_NSci <- dt_nsc %>%
+  st_drop_geometry() %>%
+  pull(NSCI)
+h_NSci <- hist(
+  x_NSci,
+  #breaks = 8,
+  plot = FALSE,
+  right = TRUE,
+  include.lowest = TRUE
+)
+
+hist_df <- data.frame(
+  xmin_count = 0,
+  count = h_NSci$counts,
+  ymin = head(h_NSci$breaks, -1),
+  ymax = tail(h_NSci$breaks, -1),
+  ymid = h_NSci$mids
+) %>%
+  mutate(
+    width = count / max(count, na.rm = TRUE) * 0.22
+  )
+
+legend <- ggplot(hist_df) +
+  geom_rect(
+    aes(xmin = -width,xmax = 0,ymin = ymin,ymax = ymax,fill = ymid),
+    colour = NA,show.legend = F
+  ) +
+  scale_y_continuous(position = "right",expand = c(0,0),breaks = c(0,0.5,1))+
+  scale_x_continuous(expand = c(0,0.01))+
+  scale_fill_viridis_c(
+    option = "C",
+    begin = 0.1,
+    end = 0.99,
+    direction = -1,
+    #limits = c(0, 1),
+    guide = "none"
+  ) +
+  labs(title = "NSCI") +
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.line.x.bottom = element_blank(),
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(size = 8, colour = "black",hjust = 0.5),
+        plot.margin = margin(0,0,0,0),
+        plot.background = element_blank(),
+        axis.line.y.right = element_line(linewidth = 0.3),
+        axis.ticks.y.right = element_line(linewidth = 0.3),
+        aspect.ratio = 3)
+
+p_nsc_fix <- ggdraw() +
+  draw_plot(p_nsc, 0, 0, 1, 1) +
+  draw_plot(legend, 0.12, 0.18, 0.26, 0.52)
 ```
 
 
@@ -482,7 +535,7 @@ p_final <- ggdraw() +
   draw_label("A", x = 0.17, y = 2/3 + 0.14, fontface = "bold", size = 12, hjust = 0, vjust = 1) +
   draw_plot(p_map_with_legend, x = 0, y = 1/3, width = 1.0, height = 0.33) +
   draw_label("B", x = 0.17, y = 1/3 + 0.33 - 0.02, fontface = "bold", size = 12, hjust = 0, vjust = 1) +
-  draw_plot(p_nsc, x = 0, y = 0, width = 1.0, height = 0.33) +
+  draw_plot(p_nsc_fix, x = 0, y = 0, width = 1.0, height = 0.33) +
   draw_label("C", x = 0.17, y = 0.31, fontface = "bold", size = 12, hjust = 0, vjust = 1)
 
 
@@ -492,4 +545,3 @@ p_final
 ```{r}
 sessionInfo()
 ```
-

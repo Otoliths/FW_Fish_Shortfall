@@ -1,10 +1,9 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S5
 # Variable-wise and group-wise relative importance of predictors in survival models of species description across biogeographic realms
 # Variable importance for species discovery delay (Linnaean)
 # Lognormal survival model + DALEX permutation importance
 # ------------------------------------------------------------------------------
-
+rm(list = ls())
 library(dplyr)
 library(purrr)
 library(tidyr)

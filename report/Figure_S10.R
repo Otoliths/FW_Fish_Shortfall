@@ -1,11 +1,8 @@
-# ------------------------------------------------------------------------------
 # Supplementary Figure S10 (continents)
-# ------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------
 # Darwinian shortfall: variable importance for sequence acquisition delay
-# Gamma survival model + DALEX permutation importance
-# ------------------------------------------------------------------------------
+# survival model + DALEX permutation importance
 
+rm(list = ls())
 library(dplyr)
 library(purrr)
 library(tidyr)
