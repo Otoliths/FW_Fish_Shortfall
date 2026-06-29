@@ -6,13 +6,13 @@ A reproducible R-based workflow to quantify global Linnaean, Wallacean, and Darw
 [![R](https://img.shields.io/badge/language-R-blue.svg)](https://www.r-project.org/)
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 [![GitHub last commit](https://img.shields.io/github/last-commit/Otoliths/FW_Fish_Shortfall)](https://github.com/Otoliths/FW_Fish_Shortfall)
-[![Zenodo DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18136683.svg)](https://doi.org/10.5281/zenodo.18136683)
+[![Zenodo DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21002116.svg)](https://doi.org/10.5281/zenodo.21002116)
 [![figshare DOI](https://img.shields.io/badge/figshare-10.6084%2Fm9.figshare.29262098-orange.svg)](https://doi.org/10.6084/m9.figshare.29262098)
 
 
 ### &#128230; **Code and Data Availability**
 
-All R scripts used for data acquisition, processing, analysis, and model fitting in this study are openly available via [GitHub Repository](https://github.com/Otoliths/FW_Fish_Shortfall) and archived on [Zenodo](https://doi.org/10.5281/zenodo.18136683) for long-term preservation.
+All R scripts used for data acquisition, processing, analysis, and model fitting in this study are openly available via [GitHub Repository](https://github.com/Otoliths/FW_Fish_Shortfall) and archived on [Zenodo](https://doi.org/10.5281/zenodo.21002116) for long-term preservation.
 
 
 ### &#128193; **Folder Descriptions**
@@ -20,12 +20,12 @@ All R scripts used for data acquisition, processing, analysis, and model fitting
 - **input/**: Stores all datasets used in the analyses, including raw input data (`raw/`), intermediate processed data (`processed/`), and analysis-ready datasets (`data_prep/`).
 - **output/**: Contains analysis outputs, including fitted model objects (`model/`), summary tables (`tables/`), and execution logs (`logs/`).
 - **figures/**: Includes all figures generated in this study, organized into main-text figures (`main/`) and supplementary figures (`supplement/`).
-- **report/**: Contains R scripts and R Markdown files used to generate all manuscript figures, including `Figure_1–4.R` and supplementary figure scripts (`Figure_S01–S19.R`).
+- **report/**: Contains R scripts and R Markdown files used to generate all manuscript figures, including `Figure_1–4.R` and supplementary figure scripts (`Figure_S01–S25.R`).
 - **FW_Fish_Shortfall.Rproj**: RStudio project file used to manage the project structure, file paths, and reproducible workflow.
 
 &#128276; *Reminder: Download Input & Output Data*
 
-Before running any analysis scripts, download the **input/** and **output/** directories from [Zenodo repository](https://doi.org/10.5281/zenodo.18136683)
+Before running any analysis scripts, download the **input/** and **output/** directories from [Zenodo repository](https://doi.org/10.5281/zenodo.21002116)
 
 This repository is organized as follows:
 
@@ -137,7 +137,7 @@ This repository is organized as follows:
 │ ├── Figure_2.html                      # Rendered HTML output for Figure 2.
 │ ├── Figure_3.html                      # Rendered HTML output for Figure 3.
 │ ├── Figure_4.html                      # Rendered HTML output for Figure 4.
-│ ├── Figure_S01-S22.R                   # Scripts for supplementary figures.
+│ ├── Figure_S01-S25.R                   # Scripts for supplementary figures.
 │
 └── FW_Fish_Shortfall.Rproj              # RStudio project file managing paths and workflow.
 
@@ -155,7 +155,7 @@ This repository is organized as follows:
 
 Ding, L., *et al.* Global freshwater fish biodiversity knowledge shortfalls inform strategic collection priorities. *[Journal]* (Year).
 
-Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.18136683
+Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.21002116
 
 
 
