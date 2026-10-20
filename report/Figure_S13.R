@@ -169,7 +169,7 @@ p2 <- suppressWarnings(suppressMessages(
 ))
 p2
 
-pw <- (p1 / p2) + plot_annotation(tag_levels = "A")
+pw <- (p1 / p2) + plot_annotation(tag_levels = "a")
 pw & theme(
   plot.tag = element_text(face = "bold"),
   axis.text = element_text(colour = "black", size = 9),
@@ -177,6 +177,6 @@ pw & theme(
   plot.margin = margin(0, 1.5, 0, 1.5),
   panel.spacing = unit(0.5, "mm")  
 )
-ggsave("figures/supplement/Figure_S13.png",
+ggsave("figures/supplement/Figure_S13.pdf",
        units = "cm",dpi = 300,
        width = 20, height = 20)

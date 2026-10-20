@@ -118,7 +118,7 @@ p2 <- ggplot(
 
 library(patchwork)  
 p1 / p2 +
-  plot_annotation(tag_levels = "A") +
+  plot_annotation(tag_levels = "a") +
   plot_layout(
     guides = "collect",    
     heights = c(1, 1)      
@@ -136,6 +136,6 @@ p1 / p2 +
   )
 
 
-ggsave("figures/supplement/Figure_S21.png",
+ggsave("figures/supplement/Figure_S21.pdf",
        units = "cm",dpi = 300,
        width = 18, height = 12)

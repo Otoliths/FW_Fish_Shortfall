@@ -42,7 +42,7 @@ p1 <- ggplot(taxon_geo_lag_clean,
               linetype = "solid",
               linewidth = 1,        
               span = 0.75) +        
-  annotate("text", x = 1770, y = Inf, label = "(A)", size = 5, fontface = "bold",hjust = 0, vjust = 2) +
+  annotate("text", x = 1770, y = Inf, label = "(a)", size = 5, fontface = "bold",hjust = 0, vjust = 2) +
   annotate("text",
            x = max(taxon_geo_lag_clean$year_description) - 100,  
            y = 250,                                
@@ -94,7 +94,7 @@ p2 <- ggplot(taxon_seq_lag_clean,
               color = "#B2182B", 
               fill = "#F4A582",
               linewidth = 1) +
-  annotate("text", x = 1770, y = Inf, label = "(B)", size = 5, fontface = "bold",hjust = 0, vjust = 2) +
+  annotate("text", x = 1770, y = Inf, label = "(b)", size = 5, fontface = "bold",hjust = 0, vjust = 2) +
   annotate("text",
            x = max(taxon_seq_lag_clean$year_description) - 100,  
            y = 250,                                
@@ -122,7 +122,7 @@ p2 <- ggplot(taxon_seq_lag_clean,
 
 p1 | p2
 ggsave(
-  filename = "figures/supplement/Figure_S17.png",
+  filename = "figures/supplement/Figure_S17.pdf",
   width    = 20,
   height   = 12,
   units    = "cm",
@@ -509,7 +509,7 @@ cowplot::ggdraw() +
   cowplot::draw_plot(p2, x = 0.00, y = 0.00, width = 0.50, height = 0.50) +
   cowplot::draw_plot(p3, x = 0.50, y = 0.00, width = 0.50, height = 0.50) +
   cowplot::draw_plot_label(
-    label = c("A", "B", "C"),
+    label = c("a", "b", "c"),
     x     = c(0.01, 0.01, 0.51),  
     y     = c(0.99, 0.49, 0.49),  
     hjust = 0, vjust = 1,
@@ -517,4 +517,4 @@ cowplot::ggdraw() +
     colour = "black",
     fontface = "bold"
   ) 
-ggsave("figures/supplement/Figure_S18.png",dpi = 300, units = "cm", width = 21, height = 18)
+ggsave("figures/supplement/Figure_S18.pdf",dpi = 300, units = "cm", width = 21, height = 18)

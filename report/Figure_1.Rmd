@@ -227,8 +227,8 @@ p_combined <- plot_grid(
   ncol = 1,
   align = "v",
   axis = "lr",
-  labels = c("A", "B", "C"),
-  label_size = 10,
+  labels = c("a", "b", "c"),
+  label_size = 12,
   label_fontface = "bold",
   label_x = 0.10,
   label_y = 0.95

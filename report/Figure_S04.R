@@ -744,9 +744,9 @@ p2 <- ggplot(effect_counts_plot_2,
   )
 
 library(patchwork)  
-p1 / p2 + plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
+p1 / p2 + plot_annotation(tag_levels = "a")
 
 
-ggsave("figures/supplement/Figure_S4.png",
+ggsave("figures/supplement/Figure_S4.pdf",
        units = "cm",dpi = 300,
        width = 18, height = 18)

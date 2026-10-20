@@ -147,12 +147,12 @@ p2 <- ggplot(country_scenario, aes(x = shortfall, y = enrichment, fill = shortfa
 
 library(patchwork)  
 p1 / p2 +
-  plot_annotation(tag_levels = "A") &
+  plot_annotation(tag_levels = "a") &
   theme(plot.tag = element_text(face = "bold"),
         axis.text = element_text(colour = "black",size = 9),
         axis.title = element_text(colour = "black",size = 10)
   )
 
-ggsave("figures/supplement/Figure_S14.png",
+ggsave("figures/supplement/Figure_S14.pdf",
        units = "cm",dpi = 300,
        width = 18, height = 20)

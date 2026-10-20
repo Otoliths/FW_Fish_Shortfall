@@ -9,7 +9,8 @@ library(ggplot2)
 
 basin <- read.csv("output/tables/basin_test_data_observed_predicted.csv")
 country <- read.csv("output/tables/contry_test_data_observed_predicted.csv")
-
+basin$withheld <- factor(basin$withheld,levels = c("5%","10%","20%"))
+country$withheld <- factor(country$withheld,levels = c("5%","10%","20%"))
 
 set2_colors <- c(
   "Description" = "#D55E00",
@@ -103,7 +104,7 @@ p2 <- ggplot(data = country,
   )
 
 
-pw <- (p1 / p2) + plot_annotation(tag_levels = "A")
+pw <- (p1 / p2) + plot_annotation(tag_levels = "a")
 pw & theme(
   plot.tag = element_text(face = "bold"),
   axis.text = element_text(colour = "black", size = 9),
@@ -111,6 +112,6 @@ pw & theme(
   plot.margin = margin(0, 1.5, 0, 1.5),
   panel.spacing = unit(0.5, "mm")  
 )
-ggsave("figures/supplement/Figure_S15.png",
+ggsave("figures/supplement/Figure_S15.pdf",
        units = "cm",dpi = 300,
        width = 20, height = 20)

@@ -248,14 +248,14 @@ plots <- lapply(plots, `+`, base_theme)
 plot_grid(
   plotlist   = plots,
   nrow       = 4,
-  labels     = LETTERS,
+  labels     = letters,
   label_fontface = "bold",
   label_colour   = "black",
-  label_size     = 9,
+  label_size     = 12,
   label_x        = 0.02,
   label_y        = 0.98,
   hjust          = 0,
   vjust          = 1
 )
 
-ggsave("figures/supplement/Figure_S20.png",dpi = 300, units = "cm", width = 21, height = 20)
+ggsave("figures/supplement/Figure_S20.pdf",dpi = 300, units = "cm", width = 21, height = 20)

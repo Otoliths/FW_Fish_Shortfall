@@ -305,8 +305,8 @@ p_combined <- plot_grid(
   ncol = 1,
   align = "v",
   axis  = "lr",
-  labels = c("A", "B", "C"),
-  label_size = 10,
+  labels = c("a", "b", "c"),
+  label_size = 12,
   label_fontface = "bold",
   label_x = 0.1,   
   label_y = 0.95   
@@ -314,4 +314,4 @@ p_combined <- plot_grid(
 
 p_combined
 
-ggsave("figures/supplement/Figure_S1.png",width = 15, height = 20, units = "cm",dpi = 300)
+ggsave("figures/supplement/Figure_S1.pdf",width = 15, height = 20, units = "cm",dpi = 300)

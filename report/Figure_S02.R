@@ -379,8 +379,8 @@ plot_grid(
   ncol = 2,                 
   align = "h",              
   axis  = "tb",             
-  labels = c("A", "B"),
-  label_size = 10,
+  labels = c("a", "b"),
+  label_size = 12,
   label_fontface = "bold",
   label_x = 0.02,          
   label_y = 0.98
@@ -388,7 +388,7 @@ plot_grid(
 
 
 ggsave(
-  filename = "figures/supplement/Figure_S2.png",
+  filename = "figures/supplement/Figure_S2.pdf",
   width    = 21,
   height   = 16,
   units    = "cm",

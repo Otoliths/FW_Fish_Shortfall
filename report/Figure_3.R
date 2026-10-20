@@ -473,11 +473,11 @@ p_nsc_fix <- ggdraw() +
 # ---- Assemble + export ----
 p_final <- ggdraw() +
   draw_plot(p_counts, x = 0.18, y = 2/3, width = 0.6, height = 0.13) +
-  draw_label("A", x = 0.17, y = 2/3 + 0.14, fontface = "bold", size = 12, hjust = 0, vjust = 1) +
+  draw_label("a", x = 0.17, y = 2/3 + 0.14, size = 13, hjust = 0, vjust = 1) +
   draw_plot(p_map_with_legend, x = 0, y = 1/3, width = 1.0, height = 0.33) +
-  draw_label("B", x = 0.17, y = 1/3 + 0.33 - 0.02, fontface = "bold", size = 12, hjust = 0, vjust = 1) +
+  draw_label("b", x = 0.17, y = 1/3 + 0.33 - 0.02, size = 13, hjust = 0, vjust = 1) +
   draw_plot(p_nsc_fix, x = 0, y = 0, width = 1.0, height = 0.33) +
-  draw_label("C", x = 0.17, y = 0.31, fontface = "bold", size = 12, hjust = 0, vjust = 1)
+  draw_label("c", x = 0.17, y = 0.31, size = 13, hjust = 0, vjust = 1)
 
 dir.create(here("figures", "main"), showWarnings = FALSE, recursive = TRUE)
 

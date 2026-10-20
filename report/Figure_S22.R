@@ -200,7 +200,7 @@ p2 <- ggplot(
 final_plot <- p1 + p2 +
   plot_layout(guides = "collect") +
   plot_annotation(
-    tag_levels = "A",
+    tag_levels = "a",
     theme = theme(
       plot.tag = element_text(face = "bold")
     )

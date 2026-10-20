@@ -495,12 +495,12 @@ p33 <- ggdraw() +
 
 ggdraw() +
   draw_plot(p1, x = 0.18,   y = 2/3, width = 0.6, height = 0.13) +
-  draw_label("A",x = 0.17,y = 2/3 + 0.14,
-             fontface = "bold",size = 12,hjust = 0,vjust = 1) +
+  draw_label("a",x = 0.17,y = 2/3 + 0.14,
+             fontface = "bold",size = 13,hjust = 0,vjust = 1) +
   draw_plot(p2, x = 0,   y = 1/3, width = 1.0, height = 0.33) +  
-  draw_label("B",x = 0.17, y = 1/3 + 0.33 - 0.02,
-             fontface = "bold",size = 12,hjust = 0,vjust = 1) +
+  draw_label("b",x = 0.17, y = 1/3 + 0.33 - 0.02,
+             fontface = "bold",size = 13,hjust = 0,vjust = 1) +
   draw_plot(p33, x = 0,   y = 0,   width = 1.0, height = 0.33)+
-  draw_label("C",x = 0.17,y = 0.31,
-             fontface = "bold",size = 12,hjust = 0,vjust = 1)
-ggsave("figures/supplement/Figure_S11.png",width = 20, height = 20, units = "cm",dpi = 300)
+  draw_label("c",x = 0.17,y = 0.31,
+             fontface = "bold",size = 13,hjust = 0,vjust = 1)
+ggsave("figures/supplement/Figure_S11.pdf",width = 20, height = 20, units = "cm",dpi = 300)

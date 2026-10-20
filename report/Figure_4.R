@@ -398,10 +398,10 @@ pp2 <- ggdraw() +
   draw_plot(pp2, 0, 0, 1, 1) +                             
   draw_plot(p2, 0.06, 0.02, 0.2, 0.5) +
   draw_plot(get_legend(p_legend), 0.07, 0.63, 0.06, 0.03) +
-  draw_label(label = expression(Delta[NSCI] == -0.30),
+  draw_label(label = bquote(Delta[NSCI] == .(sprintf("%.2f", -0.30))),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
-             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.02"),
+             x = 0.85, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression(BWR[NSCI] * ' = 5.25'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
@@ -478,8 +478,8 @@ pp3 <- ggdraw() +
   draw_plot(p3, 0.06, 0.02, 0.2, 0.5) +
   draw_label(label = expression(Delta[NSCI] == -0.43),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
-             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.02"),
+             x = 0.85, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression(BWR[NSCI] * ' = 3.05'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
@@ -555,8 +555,8 @@ pp4 <- ggdraw() +
   draw_plot(p4, 0.06, 0.02, 0.2, 0.5)  +
   draw_label(label = expression(Delta[NSCI] == -0.55),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
-             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.02"),
+             x = 0.85, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression(BWR[NSCI] * ' = 8.59'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 ################################################################################
@@ -643,8 +643,8 @@ pp5 <- ggdraw() +
   draw_plot(p5, 0.01, 0.01, 0.2, 0.55)  +
   draw_label(label = expression(Delta[NSCI] == -0.35),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
-             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.02"),
+             x = 0.85, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression(BWR[NSCI] * ' = 2.18'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
@@ -728,8 +728,8 @@ pp6 <- ggdraw() +
   draw_plot(p6, 0.01, 0.01, 0.2, 0.55)  +
   draw_label(label = expression(Delta[NSCI] == -0.33),
              x = 0.58, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
-  draw_label(label = expression("E-test, " * italic(p) * " < 0.01"),
-             x = 0.8, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
+  draw_label(label = expression("E-test, " * italic(p) * " = 0.02"),
+             x = 0.85, y = 0.08,hjust = 1, vjust = 1, size = 7.2)+
   draw_label(label = expression(BWR[NSCI] * ' = 4.33'),
              x = 0.3, y = 0.98,hjust = 1, vjust = 1, size = 7.5)
 
@@ -740,16 +740,16 @@ row_pair <- function(left_plot, right_plot, labels) {
     ncol = 2,
     rel_widths = c(0.5, 0.5),
     labels = labels,
-    label_size = 9,
-    label_fontface = "bold",
+    label_size = 12,
+    #label_fontface = "bold",
     align = "h",
     axis  = "tb"
   )
 }
 
-row1 <- row_pair(pp1, pp2, labels = c("A","B"))
-row2 <- row_pair(pp3, pp4, labels = c("C","D"))
-row3 <- row_pair(pp5, pp6, labels = c("E","F"))
+row1 <- row_pair(pp1, pp2, labels = c("a","b"))
+row2 <- row_pair(pp3, pp4, labels = c("c","d"))
+row3 <- row_pair(pp5, pp6, labels = c("e","f"))
 
 fig <- row1 / row2 / row3
 fig
@@ -763,7 +763,6 @@ ggsave(
   width = 18,
   height = 15
 )
-
 
 ################################################################################
 get_denominator_vector <- function(df_subset, scenario) {

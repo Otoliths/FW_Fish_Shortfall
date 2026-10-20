@@ -6,10 +6,10 @@ library(ggplot2)
 data <- readRDS("output/equity-adjusted_prioritization.rds")
 
 p1 <- ggplot(data$basin, aes(x = discount, y = BWR)) +
-  geom_point(size = 3, color = ifelse(data$basin$discount == 0.2,"#B83232","#2E86AB")) +
+  geom_point(size = 3, color = ifelse(data$basin$discount == 0.4,"#B83232","#2E86AB")) +
   geom_linerange(
     aes(ymin = BWR_CI_95_lower, ymax = BWR_CI_95_upper),
-    color = ifelse(data$basin$discount == 0.2,"#B83232","#2E86AB"), linewidth = 0.8
+    color = ifelse(data$basin$discount == 0.4,"#B83232","#2E86AB"), linewidth = 0.8
   ) +
  geom_text(
   aes(label = paste0("n[best]==", n_best)),
@@ -74,7 +74,7 @@ geom_text(
 
 library(patchwork)  
 p1 / p2 +
-  plot_annotation(tag_levels = "A") +
+  plot_annotation(tag_levels = "a") +
   plot_layout(
     guides = "collect",    
     heights = c(1, 1)      
@@ -85,6 +85,6 @@ p1 / p2 +
     axis.text = element_text(colour = "black", size = 9)
   )
 
-ggsave("figures/supplement/Figure_S25.png",
+ggsave("figures/supplement/Figure_S25.pdf",
        units = "cm",dpi = 300,
        width = 18, height = 12)
