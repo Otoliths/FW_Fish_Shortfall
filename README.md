@@ -157,7 +157,7 @@ This repository is organized as follows:
 
 Ding, L., *et al.* Global freshwater fish biodiversity knowledge shortfalls inform strategic collection priorities. *Nature Communications* (2026).
 
-Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (latest version). Zenodo. https://doi.org/10.5281/zenodo.18136682
+Ding et al., (2026). Data and R code from “Global shortfalls in freshwater fish biodiversity knowledge inform strategic collection priorities” (latest version). Zenodo. https://doi.org/10.5281/zenodo.18136682
 
 
 
