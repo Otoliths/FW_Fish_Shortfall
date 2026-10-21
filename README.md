@@ -4,7 +4,7 @@
 A reproducible R-based workflow to quantify global Linnaean, Wallacean, and Darwinian knowledge shortfalls in freshwater fishes and to inform strategic biodiversity collection priorities.
 
 [![R](https://img.shields.io/badge/language-R-blue.svg)](https://www.r-project.org/)
-[![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]([LICENSE](https://opensource.org/license/MIT))
 [![GitHub last commit](https://img.shields.io/github/last-commit/Otoliths/FW_Fish_Shortfall)](https://github.com/Otoliths/FW_Fish_Shortfall)
 [![Zenodo DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18136682.svg)](https://doi.org/10.5281/zenodo.18136682)
 [![figshare DOI](https://img.shields.io/badge/figshare-10.6084%2Fm9.figshare.29262098-orange.svg)](https://doi.org/10.6084/m9.figshare.29262098)
@@ -157,7 +157,7 @@ This repository is organized as follows:
 
 Ding, L., *et al.* Global freshwater fish biodiversity knowledge shortfalls inform strategic collection priorities. *Nature Communications* (2026).
 
-Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.18136682
+Ding, L. (2026). Global Freshwater Fish Knowledge Shortfalls. Zenodo. https://doi.org/10.5281/zenodo.18136682
 
 
 
